@@ -4,6 +4,8 @@ By JRS.
 
 Hideout Interiors lets you arrange your hideout from the overview. Pick out any of the hideout's things (a box, a shelf, a lamp, the clutter on the floor), move and turn them exactly, give them to another area or to none, hide the ones you don't want, and put in copies of anything the hideout has.
 
+![Pointing at the gym's punching bag in decor mode: it's outlined, with its name and area by the mouse](https://raw.githubusercontent.com/JRS-Mods/HideoutInteriors/main/images/hover-outline.jpg)
+
 It works on its own or alongside Hideout Extensions: areas moved there take the things given to them along.
 
 ## Installing
@@ -34,6 +36,8 @@ The **decor button** under the overview's own buttons (night vision, lights, cus
 | **Backspace** | Sends the hideout's own things back where, and to whom, the game has them |
 | **RESET ALL** (bottom of the panel, click twice) | Puts every thing back where, and to whom, the game has it, shows the hidden ones again and takes every decoration away |
 | **Esc** or **DONE** | Leaves decor mode |
+
+![Placing an armchair from the decorate panel: furniture tab, move arrows on the chair](https://raw.githubusercontent.com/JRS-Mods/HideoutInteriors/main/images/decorate-panel.jpg)
 
 The panel on the right holds every thing the hideout has, at every area level (built or not), once each, by kind: storage, furniture, lights, electronics, food, tools, junk and the rest. Click the **search** box under the kinds and type to find things by name (in the kind you're on; **All** searches everything). While you type, decor mode's keys and the camera's WASD, Q and E wait; Enter, Escape or a click elsewhere is done. **Drag one into the hideout** to put a copy there; let go over the panel to put it back. Copies are only the thing's look (and its lights): no game scripts, nothing to loot, a plain box round it to stand against. Each gets a picture the first time it scrolls into view; one the game won't draw outside its own camera shows its name only.
 
