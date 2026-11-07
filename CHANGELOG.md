@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0
+## 0.1.0
 
 First release. Needs SPT 4.1.x (made on 4.1.6); client only. Works with or without Hideout Extensions, and alongside Fika 2.4.
 
