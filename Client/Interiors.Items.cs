@@ -80,7 +80,7 @@ namespace HideoutInteriors
         // A new hideout visit: nothing found yet.
         private static void ForgetItems()
         {
-            originals.Clear(); resolved.Clear(); keyOf.Clear(); hiddenParts.Clear(); pickable.Clear(); renderersOf.Clear();
+            originals.Clear(); resolved.Clear(); keyOf.Clear(); hiddenParts.Clear(); pickable.Clear(); renderersOf.Clear(); sceneRoots.Clear();
             thingList.Clear(); thingListAt = -100;
             ForgetDecor();
         }
@@ -112,7 +112,7 @@ namespace HideoutInteriors
                 return free.parent == decorRoot.transform ? free : null;
             }
             area = part.GetComponentInParent<HideoutArea>(true);
-            if (area == null || Key(area) == null) return null;
+            if (area == null || Key(area) == null) { area = null; return SceneItemOf(part); }
             // Up to the first group (or the level itself): the thing is what stands in it.
             Transform found = null, t = part;
             for (; t != null && t != area.transform; t = t.parent)
@@ -120,8 +120,112 @@ namespace HideoutInteriors
                 if (IsLevel(t) || IsGroup(t)) break;
                 found = t;
             }
-            for (; t != null && t != area.transform; t = t.parent) if (IsLevel(t)) return found;
+            if (found == null) return null;
+            // Straight under the area, outside its levels (a cable run to the generator): one of its things too, unless
+            // it's the area's own machinery (its click zone, camera points) or a room part.
+            if (t == area.transform)
+            {
+                if (NotAThing(found)) return null;
+                Transform loose = Narrow(found, part);
+                return loose != null && Pickable(loose) ? loose : null;
+            }
+            for (; t != null && t != area.transform; t = t.parent) if (IsLevel(t)) return Narrow(found, part);
             return null;
+        }
+
+        // ---- the hideout's things outside its areas -------------------------------------------------------------
+
+        // The scene's own groups of things that belong to no area: its lamps, barrels and clutter (SceneContent), the
+        // cables, the cultists' room, and the seasonal decorations (--_HalloweenIllumination and the like). Not STYLE
+        // (walls and floors the customization swaps), nor wall cracks, managers or what other mods add at runtime.
+        private static readonly string[] SceneGroups = { "SceneContent", "!wires_light", "EXTENSION" };
+        private const string ScenePrefix = "~";
+        private static readonly Dictionary<Transform, bool> sceneRoots = new Dictionary<Transform, bool>();
+
+        private static bool IsSceneRoot(Transform root)
+        {
+            if (root == null || style == null || root.parent != null) return false;
+            if (sceneRoots.TryGetValue(root, out bool known)) return known;
+            bool ok = root.gameObject.scene == style.scene
+                && (Array.IndexOf(SceneGroups, root.name) >= 0 || root.name.StartsWith("--_", StringComparison.Ordinal))
+                && root.GetComponentInChildren<HideoutArea>(true) == null;
+            sceneRoots[root] = ok;
+            return ok;
+        }
+
+        private static IEnumerable<Transform> SceneRoots()
+        {
+            if (style == null) yield break;
+            foreach (GameObject go in style.scene.GetRootGameObjects())
+                if (go != null && IsSceneRoot(go.transform)) yield return go.transform;
+        }
+
+        private static bool IsSceneType(string type) => type != null && type.StartsWith(ScenePrefix, StringComparison.Ordinal);
+
+        // A part of one of the scene's things: what stands in its group. Null for room parts (too big) and the rest.
+        private static Transform SceneItemOf(Transform part)
+        {
+            Transform root = part.root;
+            if (part == root || !IsSceneRoot(root)) return null;
+            Transform found = part;
+            while (found.parent != root) found = found.parent;
+            found = Narrow(found, part);
+            return found == null || NotAThing(found) || !Pickable(found) ? null : found;
+        }
+
+        // An area's click zone, its camera and icon points: never things.
+        private static bool NotAThing(Transform t)
+        {
+            string n = t.name;
+            return n.IndexOf("raycast_collider", StringComparison.OrdinalIgnoreCase) >= 0 || n.StartsWith("VCamera", StringComparison.Ordinal)
+                || n.EndsWith("_point", StringComparison.Ordinal) || n.EndsWith("_collider", StringComparison.OrdinalIgnoreCase)
+                || n.EndsWith("_trigger", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // A group of things with no name the mod knows (PROPS, static_lamp, cut_lamp...): nothing of its own to see, several
+        // things in it, and too big to be one thing. A thing made of parts (a bed and its mattress) is small, so stays whole.
+        private static bool IsContainer(Transform t) =>
+            t.childCount >= 2 && t.GetComponent<Renderer>() == null && t.GetComponent<LODGroup>() == null && !Pickable(t);
+
+        // Down from a container to what in it the part belongs to.
+        private static Transform Narrow(Transform thing, Transform part)
+        {
+            while (thing != null && thing != part && IsContainer(thing))
+            {
+                Transform next = part;
+                while (next != null && next.parent != thing) next = next.parent;
+                if (next == null) break;
+                thing = next;
+            }
+            return thing;
+        }
+
+        // The things standing loose in a group (a scene group, or an area outside its levels), into containers.
+        private static IEnumerable<Transform> LooseThings(Transform group, bool showingOnly)
+        {
+            foreach (Transform child in group)
+            {
+                if (showingOnly && !child.gameObject.activeInHierarchy) continue;
+                if (IsLevel(child) || NotAThing(child) || child.GetComponent<DecorTag>() != null) continue;
+                if (child.GetComponentInChildren<MeshFilter>(true) == null) continue;
+                if (IsContainer(child)) { foreach (Transform inner in LooseThings(child, showingOnly)) yield return inner; continue; }
+                if (Pickable(child)) yield return child;
+            }
+        }
+
+        // Every thing outside the areas' levels: the scene's groups', and what stands straight under an area.
+        private static IEnumerable<(Transform thing, HideoutArea area)> OutsideThings(bool showingOnly)
+        {
+            foreach (Transform root in SceneRoots())
+            {
+                if (showingOnly && !root.gameObject.activeInHierarchy) continue;
+                foreach (Transform t in LooseThings(root, showingOnly)) yield return (t, null);
+            }
+            foreach (HideoutArea area in Areas())
+            {
+                if (Key(area) == null || (showingOnly && !area.gameObject.activeInHierarchy)) continue;
+                foreach (Transform t in LooseThings(area.transform, showingOnly)) yield return (t, area);
+            }
         }
 
         // What an area's level sorts its things into: its highlight_transform, immediate_enable, light_levels (and the
@@ -136,6 +240,9 @@ namespace HideoutInteriors
             }
             if (n.StartsWith("garbage", StringComparison.OrdinalIgnoreCase)) return true;
             if (n.StartsWith("level_", StringComparison.Ordinal) && n.Length > 6 && char.IsDigit(n[6])) return true;
+            // The Defective Wall's cleared rooms keep their clutter in module_01, module_04... (the bunk bed, the tractor
+            // tyre and the ladder by the gym are in module_04): as one thing those were too big to pick up.
+            if (n.StartsWith("module_", StringComparison.Ordinal) && n.Length > 7 && char.IsDigit(n[7])) return true;
             return n.Length >= 6 && char.IsDigit(n[0]) && n.EndsWith("light", StringComparison.Ordinal);
         }
 
@@ -148,6 +255,7 @@ namespace HideoutInteriors
                 if (IsGroup(child)) { foreach (Transform inner in ItemsUnder(child, showingOnly)) yield return inner; continue; }
                 if (child.GetComponentInChildren<MeshFilter>(true) == null) continue;
                 if (child.name.IndexOf("raycast_collider", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                if (IsContainer(child)) { foreach (Transform inner in ItemsUnder(child, showingOnly)) yield return inner; continue; }
                 yield return child;
             }
         }
@@ -156,10 +264,16 @@ namespace HideoutInteriors
         private static string ItemKey(HideoutArea area, Transform thing)
         {
             if (keyOf.TryGetValue(thing, out string known)) return known;
-            if (area == null) return null;
+            string extra = ExtraKeyOf(thing);
+            if (extra != null) return extra;
+            Transform top;
+            string type;
+            if (area != null) { top = area.transform; type = Key(area); }
+            else if (thing.root != thing && IsSceneRoot(thing.root)) { top = thing.root; type = ScenePrefix + top.name; }
+            else return null;
             var parts = new List<string>();
             Transform t = thing;
-            for (; t != null && t != area.transform; t = t.parent)
+            for (; t != null && t != top; t = t.parent)
             {
                 int same = 0;
                 if (t.parent != null)
@@ -171,9 +285,9 @@ namespace HideoutInteriors
                     }
                 parts.Add(same == 0 ? t.name : t.name + "#" + same);
             }
-            if (t != area.transform) return null;
+            if (t != top) return null;
             parts.Reverse();
-            string key = Key(area) + "/" + string.Join("/", parts);
+            string key = type + "/" + string.Join("/", parts);
             resolved[key] = thing; keyOf[thing] = key;
             return key;
         }
@@ -181,9 +295,21 @@ namespace HideoutInteriors
         private static Transform Resolve(string key)
         {
             if (resolved.TryGetValue(key, out Transform known) && known != null) return known;
-            HideoutArea area = AreaByType(AreaTypeOf(key));
-            if (area == null) return null;
-            Transform t = area.transform;
+            if (IsExtra(key)) return ExtraPattern(key);
+            string type = AreaTypeOf(key);
+            Transform t;
+            if (IsSceneType(type))
+            {
+                string name = type.Substring(ScenePrefix.Length);
+                t = SceneRoots().FirstOrDefault(r => r.name == name);
+                if (t == null) return null;
+            }
+            else
+            {
+                HideoutArea area = AreaByType(type);
+                if (area == null) return null;
+                t = area.transform;
+            }
             foreach (string part in key.Substring(key.IndexOf('/') + 1).Split('/'))
             {
                 string name = part;
@@ -217,12 +343,18 @@ namespace HideoutInteriors
         {
             ownerRoot = null;
             if (string.IsNullOrEmpty(owner)) return DecorRoot();
+            // One of the scene's own things, kept as the scene has it: where the game had it, in the hideout's space.
+            if (IsSceneType(owner)) return originals.TryGetValue(thing, out Origin had) && had.Parent != null ? had.Parent : thing.parent;
             HideoutArea area = AreaByType(owner);
             if (area == null) return null;
             ownerRoot = area.transform;
             if (owner == originalArea && originals.TryGetValue(thing, out Origin o) && o.Parent != null) return o.Parent;
             Transform level = null;
             try { level = area.HighlightTransform; } catch (Exception) { }
+            // In a raid copy the area was never set up: its showing level's highlight_transform, found by name.
+            if (level == null && raidCopy)
+                foreach (Transform child in area.transform)
+                    if (IsLevel(child) && child.gameObject.activeSelf) { level = child.Find("highlight_transform") ?? child; break; }
             return level;
         }
 
@@ -281,9 +413,16 @@ namespace HideoutInteriors
         // ---- putting things where they were put ---------------------------------------------------------------
 
         // Every saved thing that came from this area (wherever it is now).
-        private static void PlaceItems(HideoutArea area)
+        private static void PlaceItems(HideoutArea area) => PlaceItems(Key(area));
+
+        // Every saved thing from the scene's own groups.
+        private static void PlaceSceneItems()
         {
-            string key = Key(area);
+            foreach (Transform root in SceneRoots()) PlaceItems(ScenePrefix + root.name);
+        }
+
+        private static void PlaceItems(string key)
+        {
             if (key == null || itemLayout.Count == 0) return;
             string prefix = key + "/";
             foreach (var entry in itemLayout)
@@ -583,12 +722,5 @@ namespace HideoutInteriors
 
         private static bool Carried(Transform thing) => (dragging || axisDrag >= 0) && selection.Contains(thing);
 
-        // "cardboard_box1_open (1)" -> "cardboard box1 open"
-        private static string Pretty(string name)
-        {
-            int bracket = name.IndexOf(" (", StringComparison.Ordinal);
-            if (bracket > 0) name = name.Substring(0, bracket);
-            return name.Replace('_', ' ').Trim();
-        }
     }
 }

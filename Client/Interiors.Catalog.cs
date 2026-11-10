@@ -24,19 +24,9 @@ namespace HideoutInteriors
             public bool Tried;
             public RectTransform Cell;
             public RawImage Image;
+            public TextMeshProUGUI Label;
         }
 
-        private static readonly string[] Kinds = { "All", "Storage", "Furniture", "Lights", "Electronics", "Food", "Tools", "Junk", "Other", "Hidden" };
-        private static readonly (string kind, string[] words)[] KindWords =
-        {
-            ("Lights", new[] { "lamp", "light", "candle", "lum_", "lantern", "bulb", "garland", "torch" }),
-            ("Electronics", new[] { "pc_", "monitor", "tv", "radio", "computer", "server", "gpu", "phone", "antenna", "battery", "laptop", "keyboard", "printer", "cable", "speaker", "router", "electro", "flash_drive", "hdd", "videocard" }),
-            ("Food", new[] { "food", "bottle", "beer", "booze", "juice", "cooler", "canned", "oatmeal", "water", "vodka", "whiskey", "tea", "coffee", "sugar", "can_", "_can", "kettle", "pot", "fridge", "stove", "cup", "mug" }),
-            ("Storage", new[] { "box", "crate", "case", "suitcase", "container", "safe", "locker", "cupboard", "rack", "shelf", "drawer", "chest", "bag", "barrel", "stend", "stand", "cabinet", "carry", "toolbox", "pallet" }),
-            ("Furniture", new[] { "chair", "table", "sofa", "bed", "desk", "bench", "stool", "couch", "armchair", "mattress", "carpet", "rug", "poster", "flag", "picture", "mirror", "clock", "curtain", "plant", "flower", "statue", "trophy" }),
-            ("Tools", new[] { "tool", "wrench", "drill", "ducttape", "tape", "vise", "hammer", "saw", "axe", "screw", "bolt", "nail", "ammo", "weapon", "gun", "magazine", "grenade", "knife", "pliers", "workbench" }),
-            ("Junk", new[] { "heap", "scrap", "garb", "trash", "paper", "cardboard", "tire", "plank", "board", "brick", "debris", "rag", "cloth", "ballon", "balloon", "sand", "tube", "pipe", "bucket", "canister", "jerrycan", "paint" }),
-        };
 
         private static List<Entry> catalog;
         private static string tab = "All";
@@ -56,7 +46,9 @@ namespace HideoutInteriors
         private static readonly List<(RectTransform rect, Entry entry)> cells = new List<(RectTransform, Entry)>();
         private static readonly List<(RectTransform rect, string key)> hiddenCells = new List<(RectTransform, string)>();
 
-        private const float PanelWidth = 430, CellWidth = 98, CellHeight = 118, Gap = 4;
+        private const float PanelWidth = 540, SideWidth = 132, CellWidth = 116, CellHeight = 132, Gap = 4;
+        // The grid's width: the panel less its margins and the category list.
+        private const float GridWidth = PanelWidth - 24 - SideWidth - 8;
         private static readonly Color Ink = new Color(.85f, .83f, .78f), Dim = new Color(.55f, .54f, .5f), Amber = new Color(1f, .72f, .25f);
 
         // ---- the button ----------------------------------------------------------------------------------------
@@ -142,27 +134,39 @@ namespace HideoutInteriors
                 if (Key(area) == null) continue;
                 foreach (Transform t in area.transform.Cast<Transform>().Where(IsLevel).SelectMany(l => ItemsUnder(l, false)).ToList())
                 {
-                    if (t.GetComponent<DecorTag>() != null) continue;
+                    if (t.GetComponent<DecorTag>() != null || !ForPanel(t.name)) continue;
                     ItemOf(t, out HideoutArea from);
                     if (!MeshBounds(t, out Bounds b) || b.size.x > BiggestItem || b.size.z > BiggestItem || b.size.magnitude < .08f) continue;
                     string name = Pretty(t.name);
-                    if (!seen.Add(name.ToLowerInvariant())) continue;
+                    if (!seen.Add(BaseName(t.name).ToLowerInvariant())) continue;
                     string key = ItemKey(from ?? area, t);
                     if (key == null) continue;
                     catalog.Add(new Entry { Key = key, Name = name, Kind = KindOf(t.name), Source = t });
                 }
             }
-            catalog = catalog.OrderBy(e => Array.IndexOf(Kinds, e.Kind)).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            // And what stands outside the areas' levels: the scene's lamps, barrels, cables and seasonal decorations.
+            foreach (var (t, area) in OutsideThings(false).ToList())
+            {
+                if (!ForPanel(t.name) || !MeshBounds(t, out Bounds b) || b.size.magnitude < .08f) continue;
+                string name = Pretty(t.name);
+                if (!seen.Add(BaseName(t.name).ToLowerInvariant())) continue;
+                string key = ItemKey(area, t);
+                if (key == null) continue;
+                catalog.Add(new Entry { Key = key, Name = name, Kind = KindOf(t.name), Source = t });
+            }
+            // Different models with the same name (four armchairs): Armchair, Armchair 2, Armchair 3...
+            foreach (var same in catalog.GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            {
+                int i = 0;
+                foreach (Entry e in same.OrderBy(e => BaseName(e.Source != null ? e.Source.name : e.Name), StringComparer.OrdinalIgnoreCase))
+                    if (i++ > 0) e.Name += " " + i;
+            }
+            catalog.AddRange(ExtraEntries());
+            var tabs = TabKinds();
+            catalog = catalog.OrderBy(e => tabs.IndexOf(e.Kind)).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
             Plugin.Log.LogInfo($"Decor: {catalog.Count} kinds of thing to put in.");
         }
 
-        private static string KindOf(string name)
-        {
-            string n = name.ToLowerInvariant();
-            foreach (var (kind, words) in KindWords)
-                if (words.Any(w => n.Contains(w))) return kind;
-            return "Other";
-        }
 
         // ---- the screen ----------------------------------------------------------------------------------------
 
@@ -203,18 +207,25 @@ namespace HideoutInteriors
             Text("Info", panel, "Drag a thing into the hideout to put a copy there. Point at the hideout's things to pick them out.", 14,
                 new Vector2(12, -44), new Vector2(PanelWidth - 24, 36), TextAlignmentOptions.TopLeft, Dim, false);
 
-            tabsRow = UiRect("Tabs", panel, new Vector2(0, 1), new Vector2(0, 1), new Vector2(0, 1));
-            tabsRow.anchoredPosition = new Vector2(12, -86); tabsRow.sizeDelta = new Vector2(PanelWidth - 24, 60);
-            float tabWidth = (PanelWidth - 24 - 4 * Gap) / 5;
-            for (int i = 0; i < Kinds.Length; i++)
+            // The categories down the left of the things: a list has room for as many as there come to be (mods add
+            // their own), where a row of tabs ran out of width. Rows get shorter if they'd run off the bottom.
+            tabsRow = UiRect("Categories", panel, new Vector2(0, 0), new Vector2(0, 1), new Vector2(0, 1));
+            tabsRow.offsetMin = new Vector2(12, 48); tabsRow.offsetMax = new Vector2(12 + SideWidth, -124);
+            var tabs = TabKinds();
+            if (!tabs.Contains(tab)) tab = "All";
+            // Before the canvas has laid the panel out, its height at the reference 1080 lines.
+            float listHeight = panel.rect.height > 300 ? panel.rect.height - 124 - 48 : 1080 - 130 - 80 - 124 - 48;
+            float rowHeight = Mathf.Clamp(listHeight / tabs.Count - 2, 16, 26);
+            for (int i = 0; i < tabs.Count; i++)
             {
-                string kind = Kinds[i];
-                var pos = new Vector2((i % 5) * (tabWidth + Gap), -(i / 5) * 30);
-                RectTransform r = UiRect("Tab " + kind, tabsRow, new Vector2(0, 1), new Vector2(0, 1), new Vector2(0, 1));
-                r.anchoredPosition = pos; r.sizeDelta = new Vector2(tabWidth, 26);
+                string kind = tabs[i];
+                RectTransform r = UiRect("Category " + kind, tabsRow, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, 1));
+                r.anchoredPosition = new Vector2(0, -i * (rowHeight + 2)); r.sizeDelta = new Vector2(0, rowHeight);
                 Image back = r.gameObject.AddComponent<Image>();
-                TextMeshProUGUI label = Text("Label", r, kind, 13, Vector2.zero, new Vector2(tabWidth, 26), TextAlignmentOptions.Center, Ink, false);
-                label.rectTransform.anchorMin = Vector2.zero; label.rectTransform.anchorMax = Vector2.one; label.rectTransform.offsetMin = label.rectTransform.offsetMax = Vector2.zero;
+                TextMeshProUGUI label = Text("Label", r, kind, 13, Vector2.zero, new Vector2(SideWidth, rowHeight), TextAlignmentOptions.MidlineLeft, Ink, false);
+                label.enableAutoSizing = true; label.fontSizeMin = 9; label.fontSizeMax = 13; label.enableWordWrapping = false;
+                label.rectTransform.anchorMin = Vector2.zero; label.rectTransform.anchorMax = Vector2.one;
+                label.rectTransform.offsetMin = new Vector2(8, 0); label.rectTransform.offsetMax = new Vector2(-4, 0);
                 tabButtons.Add((r, label, back, kind));
                 buttons.Add((r, () => { tab = kind; FillTab(); }));
             }
@@ -222,14 +233,14 @@ namespace HideoutInteriors
             viewport = UiRect("Viewport", panel, Vector2.zero, Vector2.one, new Vector2(.5f, .5f));
             // The search box, over the things.
             searchBox = UiRect("Search", panel, new Vector2(0, 1), new Vector2(1, 1), new Vector2(.5f, 1));
-            searchBox.offsetMin = new Vector2(12, -186); searchBox.offsetMax = new Vector2(-12, -156);
+            searchBox.offsetMin = new Vector2(12, -116); searchBox.offsetMax = new Vector2(-12, -86);
             searchBack = searchBox.gameObject.AddComponent<Image>();
             searchText = Text("Text", searchBox, "", 14, Vector2.zero, Vector2.zero, TextAlignmentOptions.MidlineLeft, Ink, false);
             searchText.rectTransform.anchorMin = Vector2.zero; searchText.rectTransform.anchorMax = Vector2.one;
             searchText.rectTransform.offsetMin = new Vector2(10, 0); searchText.rectTransform.offsetMax = new Vector2(-10, 0);
             SearchLook();
 
-            viewport.offsetMin = new Vector2(12, 48); viewport.offsetMax = new Vector2(-12, -192);
+            viewport.offsetMin = new Vector2(12 + SideWidth + 8, 48); viewport.offsetMax = new Vector2(-12, -124);
 
             // Everything back as the game has it, on a second click.
             Image reset = Button(panel, "RESET ALL", Vector2.zero, new Vector2(150, 30), ResetClicked);
@@ -359,16 +370,16 @@ namespace HideoutInteriors
             foreach (var (rect, label, back, kind) in tabButtons)
             {
                 back.color = kind == tab ? new Color(.42f, .33f, .14f, 1) : new Color(.16f, .155f, .14f, 1);
-                label.text = kind == "Hidden" ? $"Hidden ({itemLayout.Count(e => e.Value.Hidden)})" : kind;
+                label.text = CategoryLabel(kind);
             }
-            int columns = Mathf.Max(1, Mathf.FloorToInt((PanelWidth - 24 + Gap) / (CellWidth + Gap)));
+            int columns = Mathf.Max(1, Mathf.FloorToInt((GridWidth + Gap) / (CellWidth + Gap)));
             int n = 0;
             if (tab == "Hidden")
             {
                 foreach (var entry in itemLayout.Where(e => e.Value.Hidden))
                 {
                     if (query.Length > 0 && entry.Key.IndexOf(query.Replace(' ', '_'), StringComparison.OrdinalIgnoreCase) < 0 && entry.Key.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    RectTransform cell = Cell(n++, columns, Pretty(entry.Key.Substring(entry.Key.LastIndexOf('/') + 1)) + "\n<size=11>click to show</size>", null, out _);
+                    RectTransform cell = Cell(n++, columns, Pretty(entry.Key.Substring(entry.Key.LastIndexOf('/') + 1)) + "\n<size=11>click to show</size>", null, out _, out _);
                     hiddenCells.Add((cell, entry.Key));
                 }
             }
@@ -379,7 +390,7 @@ namespace HideoutInteriors
                     if (tab != "All" && e.Kind != tab) continue;
                     if (query.Length > 0 && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
                     if (e.Source == null) continue;
-                    e.Cell = Cell(n++, columns, e.Name, e.Picture, out e.Image);
+                    e.Cell = Cell(n++, columns, ExtraLabel(e), e.Picture, out e.Image, out e.Label);
                     cells.Add((e.Cell, e));
                 }
             }
@@ -388,7 +399,7 @@ namespace HideoutInteriors
             content.anchoredPosition = Vector2.zero;
         }
 
-        private static RectTransform Cell(int index, int columns, string name, Texture2D picture, out RawImage image)
+        private static RectTransform Cell(int index, int columns, string name, Texture2D picture, out RawImage image, out TextMeshProUGUI label)
         {
             RectTransform r = UiRect("Cell", content, new Vector2(0, 1), new Vector2(0, 1), new Vector2(0, 1));
             r.anchoredPosition = new Vector2((index % columns) * (CellWidth + Gap), -(index / columns) * (CellHeight + Gap));
@@ -400,7 +411,7 @@ namespace HideoutInteriors
             image.raycastTarget = false;
             image.texture = picture;
             image.color = picture != null ? Color.white : new Color(.18f, .17f, .15f, 1);
-            Text("Name", r, name, 12, new Vector2(4, -(CellHeight - 32)), new Vector2(CellWidth - 8, 30), TextAlignmentOptions.Top, Ink, false);
+            label = Text("Name", r, name, 12, new Vector2(4, -(CellHeight - 32)), new Vector2(CellWidth - 8, 30), TextAlignmentOptions.Top, Ink, false);
             return r;
         }
 
@@ -408,7 +419,15 @@ namespace HideoutInteriors
         {
             if (ui == null) return;
             if (tab == "Hidden") FillTab();
-            else foreach (var (rect, label, back, kind) in tabButtons) if (kind == "Hidden") label.text = $"Hidden ({itemLayout.Count(e => e.Value.Hidden)})";
+            else foreach (var (rect, label, back, kind) in tabButtons) if (kind == "Hidden") label.text = CategoryLabel(kind);
+        }
+
+        // A category's row: its name and how many things are in it.
+        private static string CategoryLabel(string kind)
+        {
+            int n = kind == "Hidden" ? itemLayout.Count(e => e.Value.Hidden)
+                : catalog == null ? 0 : kind == "All" ? catalog.Count(e => e.Source != null) : catalog.Count(e => e.Kind == kind && e.Source != null);
+            return $"{kind} <color=#8a877f>{n}</color>";
         }
 
         private static bool Inside(RectTransform r, Vector2 screen) => r != null && r.gameObject.activeInHierarchy && RectTransformUtility.RectangleContainsScreenPoint(r, screen, null);
@@ -469,7 +488,7 @@ namespace HideoutInteriors
         // A new copy of a catalog thing, carried from the panel.
         private static void StartPlacing(Entry entry)
         {
-            if (entry.Source == null) return;
+            if (entry.Source == null || !RoomForAnother(entry)) return;
             Transform copy = MakeCopy(entry.Source, DecorRoot(), false);
             if (copy == null) { EFT.Communications.NotificationManager.DisplayWarningNotification($"{entry.Name} couldn't be copied."); return; }
             ClearSelection();
@@ -503,6 +522,7 @@ namespace HideoutInteriors
         private static string AreaName(string type)
         {
             if (string.IsNullOrEmpty(type)) return "no area";
+            if (IsSceneType(type)) return "the hideout (no area)";
             HideoutArea area = AreaByType(type);
             return area != null ? Name(area) : type;
         }
@@ -585,12 +605,11 @@ namespace HideoutInteriors
         private static Light studioLight;
         private static RenderTexture studioTarget;
         private const int StudioLayer = 31;
-        private static int picturesFailed;
 
         // One picture a frame, of the next thing on show in the panel without one.
         private static void Thumbnails()
         {
-            if (ui == null || tab == "Hidden" || picturesFailed > 12) return;
+            if (ui == null || tab == "Hidden") return;
             float height = viewport.rect.height, scroll = content.anchoredPosition.y;
             foreach (var (rect, entry) in cells)
             {
@@ -600,11 +619,58 @@ namespace HideoutInteriors
                 entry.Tried = true;
                 try { entry.Picture = Picture(entry.Source); }
                 catch (Exception e) { Plugin.Log.LogWarning($"Decor: no picture of {entry.Name}: {e.Message}"); }
-                if (entry.Picture == null) picturesFailed++;
-                else picturesFailed = 0;
                 if (entry.Image != null && entry.Picture != null) { entry.Image.texture = entry.Picture; entry.Image.color = Color.white; }
                 return;
             }
+        }
+
+        // The game's materials use its own shaders, which only draw for its own cameras (deferred, with its lighting
+        // steps): for the picture each is swapped for Unity's Standard shader with the same texture, colour and normal
+        // map. Shadow-only meshes (the _SHADOW_LODs) are left out, and only the most detailed LOD shows.
+        private static readonly Dictionary<Material, Material> pictureMaterials = new Dictionary<Material, Material>();
+        private static Shader standard;
+
+        private static void ForThePicture(Transform copy)
+        {
+            if (standard == null) standard = Shader.Find("Standard");
+            foreach (LODGroup g in copy.GetComponentsInChildren<LODGroup>(true)) g.ForceLOD(0);
+            foreach (Renderer r in copy.GetComponentsInChildren<Renderer>(true))
+            {
+                if (r.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly) { r.enabled = false; continue; }
+                if (standard == null) continue;
+                Material[] mats = r.sharedMaterials;
+                for (int i = 0; i < mats.Length; i++) mats[i] = PictureMaterial(mats[i]);
+                r.sharedMaterials = mats;
+            }
+        }
+
+        private static Material PictureMaterial(Material from)
+        {
+            if (from == null) return null;
+            if (pictureMaterials.TryGetValue(from, out Material made) && made != null) return made;
+            made = new Material(standard) { name = "Hideout Interiors picture " + from.name };
+            Texture main = from.HasProperty("_MainTex") ? from.GetTexture("_MainTex") : null;
+            if (main == null) main = from.mainTexture;
+            if (main != null) { made.mainTexture = main; made.mainTextureScale = from.HasProperty("_MainTex") ? from.mainTextureScale : Vector2.one; }
+            Color colour = from.HasProperty("_Color") ? from.GetColor("_Color") : Color.white;
+            colour.a = 1;
+            made.color = colour;
+            if (from.HasProperty("_BumpMap") && from.GetTexture("_BumpMap") is Texture bump)
+            {
+                made.SetTexture("_BumpMap", bump);
+                made.EnableKeyword("_NORMALMAP");
+            }
+            made.SetFloat("_Glossiness", .25f);
+            made.SetFloat("_Metallic", 0);
+            // Leaves, grilles, cloth with holes: cut out where the texture is see-through.
+            if (from.renderQueue >= 2450 && main != null)
+            {
+                made.SetFloat("_Mode", 1);
+                made.SetFloat("_Cutoff", .5f);
+                made.EnableKeyword("_ALPHATEST_ON");
+                made.renderQueue = 2450;
+            }
+            return pictureMaterials[from] = made;
         }
 
         // A copy stood far under the hideout, lit by its own light, seen by its own camera.
@@ -622,6 +688,7 @@ namespace HideoutInteriors
                 studio.cullingMask = 1 << StudioLayer;
                 studio.fieldOfView = 30;
                 studio.renderingPath = RenderingPath.Forward;
+                studio.useOcclusionCulling = false;
                 studio.allowHDR = false; studio.allowMSAA = false;
                 var lightGo = new GameObject("Light");
                 lightGo.transform.SetParent(go.transform, false);
@@ -640,6 +707,7 @@ namespace HideoutInteriors
                 copy.position = new Vector3(0, -400, 0);
                 foreach (Transform t in copy.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = StudioLayer;
                 foreach (Light l in copy.GetComponentsInChildren<Light>(true)) l.enabled = false;
+                ForThePicture(copy);
                 if (!Bounds(copy, out Bounds b)) return null;
                 Vector3 from = new Vector3(-1f, .85f, -1f).normalized;
                 float radius = Mathf.Max(.05f, b.extents.magnitude);
@@ -652,11 +720,19 @@ namespace HideoutInteriors
                 studioLight.enabled = true;
                 Color ambient = RenderSettings.ambientLight;
                 bool fog = RenderSettings.fog;
-                RenderSettings.ambientLight = new Color(.45f, .44f, .42f);
+                var ambientMode = RenderSettings.ambientMode;
+                float ambientIntensity = RenderSettings.ambientIntensity;
+                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+                RenderSettings.ambientLight = new Color(.5f, .49f, .47f);
+                RenderSettings.ambientIntensity = 1;
                 RenderSettings.fog = false;
                 studio.targetTexture = studioTarget;
                 try { studio.Render(); }
-                finally { RenderSettings.ambientLight = ambient; RenderSettings.fog = fog; studioLight.enabled = false; studio.targetTexture = null; }
+                finally
+                {
+                    RenderSettings.ambientMode = ambientMode; RenderSettings.ambientLight = ambient; RenderSettings.ambientIntensity = ambientIntensity;
+                    RenderSettings.fog = fog; studioLight.enabled = false; studio.targetTexture = null;
+                }
                 RenderTexture before = RenderTexture.active;
                 RenderTexture.active = studioTarget;
                 var picture = new Texture2D(128, 128, TextureFormat.RGB24, false) { name = "Hideout extensions picture " + source.name };

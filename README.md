@@ -2,7 +2,7 @@
 
 By JRS.
 
-Hideout Interiors lets you arrange your hideout from the overview. Pick out any of the hideout's things (a box, a shelf, a lamp, the clutter on the floor), move and turn them exactly, give them to another area or to none, hide the ones you don't want, and put in copies of anything the hideout has.
+Hideout Interiors lets you arrange your hideout from the overview. Pick out any of the hideout's things (a box, a shelf, a lamp, the clutter on the floor, the seasonal decorations; the areas' and the ones that belong to no area), move and turn them exactly, give them to another area or to none, hide the ones you don't want, and put in copies of anything the hideout has.
 
 ![Pointing at the gym's punching bag in decor mode: it's outlined, with its name and area by the mouse](https://raw.githubusercontent.com/JRS-Mods/HideoutInteriors/main/images/hover-outline.jpg)
 
@@ -46,6 +46,14 @@ What you change is kept per profile in `BepInEx/config`:
 - `jrs.hideoutinteriors.items.<profile id>.json`: the hideout's things you moved, gave away or hid. Delete it to put them all back.
 - `jrs.hideoutinteriors.decor.<profile id>.json`: your decorations. Delete it to take them all away.
 
+
+## In the siege
+
+Tushonka: Hideout Under Siege loads your hideout as a raid map, and the things you've moved, given away or hidden are as you left them there, with your decorations. In co-op everyone gets the host's.
+
+For modders: `HideoutInteriorsApi.RaidCopySnapshot()` gives the playing profile's arrangement as text, and `HideoutInteriorsApi.BuildRaidCopy(snapshot)` puts it into the hideout scene loaded as a raid's map. Call it once per raid, after the areas stand where they'll stay (after Hideout Extensions' `BuildRaidCopy`). The player's files are left alone.
+
+Other mods can add things of their own to the decor panel: `HideoutInteriorsApi.AddDecor(key, name, kind, make)`, called at startup, puts one under `kind`, where `make` builds the thing the copies are taken from. `kind` is one of the panel's tabs, or a name of the mod's own, which becomes a tab after Other. `AddDecor(key, name, kind, make, limit)` also caps how many a hideout can have: the panel shows "2 of 6" under it and won't put more in. Placed ones are kept under the key, and come back wherever that mod has added it again. `HideoutInteriorsApi.DecorOf(key)` gives the ones placed right now. Tushonka: Hideout Under Siege adds a Defences tab this way: sandbags, a steel barricade, barbed wire and its mounted gun.
 
 ## Settings
 

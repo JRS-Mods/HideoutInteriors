@@ -85,6 +85,7 @@ namespace HideoutInteriors
 
         private static void SaveDecor()
         {
+            RefreshLimits();
             if (decorFile == null) return;
             try { File.WriteAllText(decorFile, JsonConvert.SerializeObject(decorLayout, Formatting.Indented)); }
             catch (Exception e) { Plugin.Log.LogWarning($"Couldn't save {decorFile}: {e.Message}"); }
@@ -399,6 +400,8 @@ namespace HideoutInteriors
                         if (seen.Add(t) && Pickable(t)) yield return t;
                 }
             }
+            foreach (var (t, _) in OutsideThings(true))
+                if (seen.Add(t)) yield return t;
             if (decorRoot != null)
                 foreach (Transform t in decorRoot.transform)
                     if (t.gameObject.activeInHierarchy && seen.Add(t)) yield return t;
