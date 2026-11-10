@@ -47,13 +47,13 @@ What you change is kept per profile in `BepInEx/config`:
 - `jrs.hideoutinteriors.decor.<profile id>.json`: your decorations. Delete it to take them all away.
 
 
-## In the siege
+## For other mods
 
-Tushonka: Hideout Under Siege loads your hideout as a raid map, and the things you've moved, given away or hidden are as you left them there, with your decorations. In co-op everyone gets the host's.
+A mod that loads your hideout as a raid map can bring your arrangement with it: the things you've moved, given away or hidden, as you left them, with your decorations. In co-op everyone gets the host's.
 
 For modders: `HideoutInteriorsApi.RaidCopySnapshot()` gives the playing profile's arrangement as text, and `HideoutInteriorsApi.BuildRaidCopy(snapshot)` puts it into the hideout scene loaded as a raid's map. Call it once per raid, after the areas stand where they'll stay (after Hideout Extensions' `BuildRaidCopy`). The player's files are left alone.
 
-Other mods can add things of their own to the decor panel: `HideoutInteriorsApi.AddDecor(key, name, kind, make)`, called at startup, puts one under `kind`, where `make` builds the thing the copies are taken from. `kind` is one of the panel's tabs, or a name of the mod's own, which becomes a tab after Other. `AddDecor(key, name, kind, make, limit)` also caps how many a hideout can have: the panel shows "2 of 6" under it and won't put more in. Placed ones are kept under the key, and come back wherever that mod has added it again. `HideoutInteriorsApi.DecorOf(key)` gives the ones placed right now. Tushonka: Hideout Under Siege adds a Defences tab this way: sandbags, a steel barricade, barbed wire and its mounted gun.
+Other mods can add things of their own to the decor panel: `HideoutInteriorsApi.AddDecor(key, name, kind, make)`, called at startup, puts one under `kind`, where `make` builds the thing the copies are taken from. `kind` is one of the panel's tabs, or a name of the mod's own, which becomes a tab after Other. `AddDecor(key, name, kind, make, limit)` also caps how many a hideout can have: the panel shows "2 of 6" under it and won't put more in. Placed ones are kept under the key, and come back wherever that mod has added it again. `HideoutInteriorsApi.DecorOf(key)` gives the ones placed right now.
 
 ## Settings
 

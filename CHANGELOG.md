@@ -14,14 +14,13 @@ Needs SPT 4.1.x; client only. Install over 0.1.0: what you've moved, hidden and 
 
 - **Pictures.** Most things showed a blank square: the game's materials only draw for its own camera, and after a dozen blanks in a row the panel stopped trying. Pictures are now drawn with plain copies of each thing's textures, and every thing gets one.
 - **Plain names.** Things are called what they are (Metal bunk bed, Tall gun safe, Strip light, Pile of scrap) rather than by the game's file names (bed_metal_bunk, scontainer_gunsafe_tall, Lum_lamp_hideout, heap_scrap_3). Different models of the same thing are numbered (Armchair, Armchair 2...). The same names show when you point at things in the hideout.
-- **New categories, in a list down the side** with how many things each holds: Furniture, Storage, Lighting, Electronics, Kitchen, Medical, Weapons & gear, Gym & range, Tools, Clothing, Books & paper, Decoration, Seasonal, Pets, Bathroom, Pipes & cables, Building, Junk. Mods' own categories (Defences) go after them. The list has room for more where the row of tabs didn't.
+- **New categories, in a list down the side** with how many things each holds: Furniture, Storage, Lighting, Electronics, Kitchen, Medical, Weapons & gear, Gym & range, Tools, Clothing, Books & paper, Decoration, Seasonal, Pets, Bathroom, Pipes & cables, Building, Junk. Other mods' own categories go after them. The list has room for more where the row of tabs didn't.
 - The panel no longer offers colliders, decals, sound emitters and other parts of the scene that aren't things.
 
-### Hideout Under Siege and other mods
+### For other mods
 
-- **Your arrangement in Tushonka: Hideout Under Siege.** Things you've moved, given away or hidden, and your decorations, are in the siege's copy of your hideout. In co-op everyone gets the host's.
-- **For modders:** `HideoutInteriorsApi.RaidCopySnapshot()` and `BuildRaidCopy(snapshot)`.
-- **For modders:** `HideoutInteriorsApi.AddDecor(key, name, kind, make)` puts a thing of your mod's in the decor panel, and `DecorOf(key)` finds the ones placed. A `kind` of your own becomes a tab of its own, and `AddDecor(key, name, kind, make, limit)` caps how many a hideout can have (the panel shows how many are in). Tushonka: Hideout Under Siege adds a Defences tab this way.
+- **For modders:** `HideoutInteriorsApi.RaidCopySnapshot()` and `BuildRaidCopy(snapshot)` put your arrangement (things moved, given away or hidden, and your decorations) into a copy of the hideout that a mod loads as a raid map. In co-op everyone gets the host's.
+- **For modders:** `HideoutInteriorsApi.AddDecor(key, name, kind, make)` puts a thing of your mod's in the decor panel, and `DecorOf(key)` finds the ones placed. A `kind` of your own becomes a tab of its own, and `AddDecor(key, name, kind, make, limit)` caps how many a hideout can have (the panel shows how many are in).
 - Nothing runs in a raid copy once it's set up (it was looking for the hideout's overview every second, a stall you could feel).
 
 ## 0.1.0

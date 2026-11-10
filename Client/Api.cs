@@ -1,7 +1,7 @@
 namespace HideoutInteriors
 {
     /// <summary>
-    /// For a mod that loads the hideout's scene as a raid map (Hideout Siege): the playing profile's arrangement of the
+    /// For a mod that loads the hideout's scene as a raid map: the playing profile's arrangement of the
     /// hideout, as text to keep or send to the other players in the raid, and that put into the raid's copy of the hideout.
     /// Reference HideoutInteriors.dll, or find these by name, and call them only where the mod is installed.
     /// </summary>

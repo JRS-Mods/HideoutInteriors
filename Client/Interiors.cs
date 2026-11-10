@@ -30,7 +30,7 @@ namespace HideoutInteriors
         private static HideoutScreenRear rear;
         private static float nextRear;
         private static bool visited;
-        // The hideout here is another mod's raid map (Hideout Siege), set up once from a snapshot: its areas never get
+        // The hideout here is another mod's raid map, set up once from a snapshot: its areas never get
         // their data, and nothing of it is kept.
         private static bool raidCopy;
 
