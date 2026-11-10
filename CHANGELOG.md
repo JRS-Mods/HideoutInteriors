@@ -1,23 +1,23 @@
 # Changelog
 
-## 0.4.0
+## 0.2.0
 
-- **Pictures in the decor panel.** Most things showed a blank square: the game's materials only draw for its own camera, and after a dozen blanks in a row the panel stopped trying. Pictures are now drawn with plain copies of each thing's textures, and every thing gets one.
+Needs SPT 4.1.x; client only. Install over 0.1.0: what you've moved, hidden and put in carries over.
+
+### Everything in the hideout
+
+- **Every one of the hideout's things, not only the areas'.** The lamps on the walls and ceiling, the barrels and clutter that belong to no area, the seasonal decorations (Halloween's pumpkins, candles and bats, and the like), and things standing beside an area rather than in one of its levels can all be moved, turned, hidden, given to an area and copied from the panel. Things that belong to no area show as "the hideout (no area)" and stay where you put them.
+- **The bunk bed, tractor tyre and aluminium ladder by the gym can be moved and hidden.** They're the Defective Wall's leftovers, kept in a group the mod didn't know, so they counted as one thing too big to pick up. The same went for the gear rack's and the cultists' room's PROPS. Each thing in those groups is now its own.
+- Walls, floors, ceilings and the long cable runs are still the room: anything over 6 m across stays put.
+
+### The decor panel
+
+- **Pictures.** Most things showed a blank square: the game's materials only draw for its own camera, and after a dozen blanks in a row the panel stopped trying. Pictures are now drawn with plain copies of each thing's textures, and every thing gets one.
 - **Plain names.** Things are called what they are (Metal bunk bed, Tall gun safe, Strip light, Pile of scrap) rather than by the game's file names (bed_metal_bunk, scontainer_gunsafe_tall, Lum_lamp_hideout, heap_scrap_3). Different models of the same thing are numbered (Armchair, Armchair 2...). The same names show when you point at things in the hideout.
 - **New categories, in a list down the side** with how many things each holds: Furniture, Storage, Lighting, Electronics, Kitchen, Medical, Weapons & gear, Gym & range, Tools, Clothing, Books & paper, Decoration, Seasonal, Pets, Bathroom, Pipes & cables, Building, Junk. Mods' own categories (Defences) go after them. The list has room for more where the row of tabs didn't.
 - The panel no longer offers colliders, decals, sound emitters and other parts of the scene that aren't things.
 
-## 0.3.0
-
-- **Every one of the hideout's things, not only the areas'.** The lamps on the walls and ceiling, the barrels and clutter that belong to no area, the seasonal decorations (Halloween's pumpkins, candles and bats, and the like), and things standing beside an area rather than in one of its levels can all be moved, turned, hidden, given to an area and copied from the panel. Things that belong to no area show as "the hideout (no area)" and stay where you put them.
-- **Things in groups the mod didn't know are separate.** Some areas keep their things in a group of their own (the gear rack's and the cultists' room's PROPS); such a group counted as one thing, too big to pick up. Each thing in it is now its own.
-- Walls, floors, ceilings and the long cable runs are still the room: anything over 6 m across stays put.
-
-## 0.2.1
-
-- **The bunk bed, tractor tyre and aluminium ladder by the gym can be moved and hidden.** They're the Defective Wall's leftovers, kept in a group the mod didn't know, so the three counted as one thing too big to pick up. Each one (and the rest of that clutter) is now a thing of its own.
-
-## 0.2.0
+### Hideout Under Siege and other mods
 
 - **Your arrangement in Tushonka: Hideout Under Siege.** Things you've moved, given away or hidden, and your decorations, are in the siege's copy of your hideout. In co-op everyone gets the host's.
 - **For modders:** `HideoutInteriorsApi.RaidCopySnapshot()` and `BuildRaidCopy(snapshot)`.

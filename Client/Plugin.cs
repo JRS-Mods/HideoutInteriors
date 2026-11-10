@@ -14,7 +14,7 @@ namespace HideoutInteriors
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Id = "jrs.hideoutinteriors";
-        public const string Version = "0.4.0";
+        public const string Version = "0.2.0";
         internal static ManualLogSource Log;
         internal static string Folder;
         private Harmony harmony;
