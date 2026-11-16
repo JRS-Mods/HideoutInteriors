@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
+using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -95,5 +96,53 @@ namespace HideoutInteriors
     {
         public string Id;
         public string Source;
+        // How big against the thing it copies (1 = as the game has it), and that thing's size in the world.
+        public float Scale = 1;
+        public Vector3 BaseScale = Vector3.one;
+        // Stretched along its own X, Y and Z on top of that (1, 1, 1: its own shape).
+        public Vector3 Stretch = Vector3.one;
+        // Posters and TV screens: the picture or video (a link, or a file in the media folder), the face's size in
+        // metres (a height of 0 follows the picture's shape), whether its sound is off and how loud it is (of the
+        // settings' video volume).
+        public string Media;
+        public float Width, Height;
+        public bool Muted;
+        public float Volume = 1;
+        // A list of pictures or videos it goes through in order (and how long each picture stays), and its frame's style.
+        public string[] Playlist;
+        public float Interval;
+        public int Frame;
+        // Its group, name, lock, light and what it does (see ThingMeta).
+        public ThingMeta Meta = new ThingMeta();
+    }
+
+    /// <summary>
+    /// What a thing has on top of where it stands: the group it's locked into, a name of your own, whether it's locked
+    /// against picking, how its lights are set, and whether it's open, alive (its animations play), wandering, or (one
+    /// of the hideout's own) stopped. Kept with the thing; left out of the file while it's all as it comes.
+    /// </summary>
+    internal sealed class ThingMeta
+    {
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string Group;
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string Label;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Locked;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool LightOff;
+        // "#rrggbb", or left out for the lamp's own colour.
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string LightColor;
+        // How bright against its own (1).
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore), System.ComponentModel.DefaultValue(1f)]
+        public float LightPower = 1;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Open, Alive, Wander, Still;
+
+        [JsonIgnore]
+        public bool IsDefault => Group == null && Label == null && !Locked && !LightOff && LightColor == null && LightPower == 1f && !Open && !Alive && !Wander && !Still;
+
+        public ThingMeta Clone() => (ThingMeta)MemberwiseClone();
     }
 }

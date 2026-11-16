@@ -4,3 +4,4 @@ dist/
 .vs/
 *.user
 *.zip
+dev/selftest-out/

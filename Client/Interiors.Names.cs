@@ -19,8 +19,8 @@ namespace HideoutInteriors
         private static readonly string[] Kinds =
         {
             "All", "Furniture", "Storage", "Lighting", "Electronics", "Kitchen", "Medical", "Weapons & gear", "Gym & range",
-            "Tools", "Clothing", "Books & paper", "Decoration", "Seasonal", "Pets", "Bathroom", "Pipes & cables", "Building",
-            "Junk", "Other", "Hidden",
+            "Clothing", "Books & paper", "Decoration", "Seasonal", "Pets", "Bathroom", "Pipes & cables", BuildingKind,
+            "Rooms & walls", "Junk", "Other", "Hidden",
         };
 
         // Not things to put in: the scene's colliders, markers, room shells, decals and stand-ins.
@@ -334,7 +334,10 @@ namespace HideoutInteriors
         // A thing's name for the panel and the notes by the mouse.
         private static string Pretty(string raw) => Describe(raw).name;
 
-        private static string KindOf(string raw) => Describe(raw).kind;
+        // Tools and building stuff are one category: a tab called Tools was the panel's own list of buttons too.
+        private const string BuildingKind = "Building & tools";
+        private static string KindOf(string raw) => OneKind(Describe(raw).kind);
+        private static string OneKind(string kind) => kind == "Tools" || kind == "Building" ? BuildingKind : kind;
 
         // Not shown in the panel: the scene's colliders, markers, decals and room shells.
         private static bool ForPanel(string raw) => !NotForPanel.IsMatch(BaseName(raw));

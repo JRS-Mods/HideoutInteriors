@@ -29,10 +29,16 @@ namespace HideoutInteriors
             public float[] Position;
             public float[] Rotation;
             public bool Hidden;
+            // How big against how the game has it, along its own X, Y and Z (left out: as the game has it).
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public float[] Scale;
+            // Its group, name, lock, light and whether its animations are stopped.
+            [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+            public ThingMeta Meta;
         }
 
-        // Where the game had a thing: its parent, its pose under it and whether it was switched on.
-        private struct Origin { public Transform Parent; public Vector3 Position; public Quaternion Rotation; }
+        // Where the game had a thing: its parent, its pose and size under it, and its size in the world.
+        private struct Origin { public Transform Parent; public Vector3 Position, Scale, WorldScale; public Quaternion Rotation; }
 
         private static readonly Dictionary<string, ItemPlacement> itemLayout = new Dictionary<string, ItemPlacement>();
         private static string itemsFile;
@@ -73,6 +79,7 @@ namespace HideoutInteriors
         private static void SaveItems()
         {
             if (itemsFile == null) return;
+            TidyMeta();
             try { File.WriteAllText(itemsFile, JsonConvert.SerializeObject(itemLayout, Formatting.Indented)); }
             catch (Exception e) { Plugin.Log.LogWarning($"Couldn't save {itemsFile}: {e.Message}"); }
         }
@@ -80,8 +87,10 @@ namespace HideoutInteriors
         // A new hideout visit: nothing found yet.
         private static void ForgetItems()
         {
-            originals.Clear(); resolved.Clear(); keyOf.Clear(); hiddenParts.Clear(); pickable.Clear(); renderersOf.Clear(); sceneRoots.Clear();
+            originals.Clear(); itemSizes.Clear(); resolved.Clear(); keyOf.Clear(); hiddenParts.Clear(); pickable.Clear(); renderersOf.Clear(); sceneRoots.Clear();
             thingList.Clear(); thingListAt = -100;
+            ForgetHistory();
+            ForgetMotion();
             ForgetDecor();
         }
 
@@ -271,6 +280,23 @@ namespace HideoutInteriors
             if (area != null) { top = area.transform; type = Key(area); }
             else if (thing.root != thing && IsSceneRoot(thing.root)) { top = thing.root; type = ScenePrefix + top.name; }
             else return null;
+            return PathKey(top, type, thing);
+        }
+
+        /// <summary>
+        /// A key for anything else the hideout's scene has (a part of a room, a thing under a root that's none of the
+        /// scene's groups): by its root and its path under it. Only the panel asks for these, for things to copy: they
+        /// aren't picked up in the hideout, so pointing at things never makes one.
+        /// </summary>
+        private static string RootKey(Transform thing)
+        {
+            if (keyOf.TryGetValue(thing, out string known)) return known;
+            if (style == null || thing.root == thing || thing.gameObject.scene != style.scene) return null;
+            return PathKey(thing.root, ScenePrefix + thing.root.name, thing);
+        }
+
+        private static string PathKey(Transform top, string type, Transform thing)
+        {
             var parts = new List<string>();
             Transform t = thing;
             for (; t != null && t != top; t = t.parent)
@@ -302,6 +328,7 @@ namespace HideoutInteriors
             {
                 string name = type.Substring(ScenePrefix.Length);
                 t = SceneRoots().FirstOrDefault(r => r.name == name);
+                if (t == null && style != null) t = style.scene.GetRootGameObjects().FirstOrDefault(g => g != null && g.name == name)?.transform;
                 if (t == null) return null;
             }
             else
@@ -310,8 +337,12 @@ namespace HideoutInteriors
                 if (area == null) return null;
                 t = area.transform;
             }
+            string walked = type;
             foreach (string part in key.Substring(key.IndexOf('/') + 1).Split('/'))
             {
+                // A part of a thing that hangs somewhere else now (given to another area): from where that thing is.
+                walked += "/" + part;
+                if (walked.Length < key.Length && resolved.TryGetValue(walked, out Transform moved) && moved != null) { t = moved; continue; }
                 string name = part;
                 int index = 0, hash = part.LastIndexOf('#');
                 if (hash > 0 && int.TryParse(part.Substring(hash + 1), out int n)) { name = part.Substring(0, hash); index = n; }
@@ -331,7 +362,7 @@ namespace HideoutInteriors
 
         private static void Remember(Transform thing)
         {
-            if (!originals.ContainsKey(thing)) originals[thing] = new Origin { Parent = thing.parent, Position = thing.localPosition, Rotation = thing.localRotation };
+            if (!originals.ContainsKey(thing)) originals[thing] = new Origin { Parent = thing.parent, Position = thing.localPosition, Rotation = thing.localRotation, Scale = thing.localScale, WorldScale = thing.lossyScale };
         }
 
         // Whom a game thing belongs to now: what it was given to, or the area it came from.
@@ -398,6 +429,19 @@ namespace HideoutInteriors
                     else bounds.Encapsulate(w);
                 }
             }
+            // Things with a skeleton (the cat, a mannequin): their skin's box, as it's kept against its root bone.
+            foreach (SkinnedMeshRenderer skin in thing.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                if (skin.sharedMesh == null) continue;
+                Bounds local = skin.localBounds;
+                Matrix4x4 m = (skin.rootBone != null ? skin.rootBone : skin.transform).localToWorldMatrix;
+                for (int i = 0; i < 8; i++)
+                {
+                    Vector3 w = m.MultiplyPoint3x4(local.center + Vector3.Scale(local.extents, new Vector3((i & 1) == 0 ? -1 : 1, (i & 2) == 0 ? -1 : 1, (i & 4) == 0 ? -1 : 1)));
+                    if (!any) { bounds = new Bounds(w, Vector3.zero); any = true; }
+                    else bounds.Encapsulate(w);
+                }
+            }
             return any;
         }
 
@@ -446,7 +490,9 @@ namespace HideoutInteriors
             var rotation = new Quaternion(p.Rotation[0], p.Rotation[1], p.Rotation[2], p.Rotation[3]);
             if (ownerRoot != null) thing.SetPositionAndRotation(ownerRoot.TransformPoint(position), ownerRoot.rotation * rotation);
             else thing.SetPositionAndRotation(position, rotation);
+            if (p.Scale?.Length == 3 && p.Scale.All(f => f != 0)) SetSize(thing, new Vector3(p.Scale[0], p.Scale[1], p.Scale[2]));
             SetHidden(thing, p.Hidden);
+            ApplyMeta(thing, p.Meta, true);
             Culled(thing);
             Moved();
         }
@@ -468,6 +514,8 @@ namespace HideoutInteriors
                 Position = new[] { position.x, position.y, position.z },
                 Rotation = new[] { rotation.x, rotation.y, rotation.z, rotation.w },
                 Hidden = hidden ?? wasHidden,
+                Scale = itemSizes.TryGetValue(thing, out Vector3 size) && size != Vector3.one ? new[] { size.x, size.y, size.z } : null,
+                Meta = before?.Meta,
             };
             SetHidden(thing, hidden ?? wasHidden);
             Culled(thing);
@@ -478,10 +526,14 @@ namespace HideoutInteriors
         private static void RestoreItem(Transform thing, string key)
         {
             itemLayout.Remove(key);
+            itemSizes.Remove(thing);
             SetHidden(thing, false);
+            ApplyMeta(thing, null, true);
             if (originals.TryGetValue(thing, out Origin o))
             {
                 if (o.Parent != null && thing.parent != o.Parent) thing.SetParent(o.Parent, false);
+                // Its size too: only if it's under the parent that size was measured under.
+                if (thing.parent == o.Parent) thing.localScale = o.Scale;
                 thing.localPosition = o.Position; thing.localRotation = o.Rotation;
             }
             Culled(thing);
@@ -574,6 +626,8 @@ namespace HideoutInteriors
             {
                 RaycastHit hit = rayHits[i];
                 Transform thing = ItemOf(hit.collider.transform, out HideoutArea owner);
+                // A locked thing: looked past, as if it weren't there.
+                if (thing != null && IsLocked(thing)) continue;
                 if (thing == null)
                 {
                     if (hit.point.y > SeenThrough || hit.collider.transform.root.name == ExtensionRooms) continue;
@@ -596,7 +650,7 @@ namespace HideoutInteriors
                 if (t == null || size >= bestSize) continue;
                 Bounds near = box;
                 near.Expand(.06f);
-                if (!near.Contains(p)) continue;
+                if (!near.Contains(p) || IsLocked(t)) continue;
                 best = t; bestSize = size; area = null;
             }
             if (best != null && area == null) ItemOf(best, out area);

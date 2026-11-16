@@ -21,6 +21,22 @@ $userDotnet = Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe'
 $dotnet = if (Test-Path $userDotnet) { $userDotnet } else { 'dotnet' }
 & $dotnet build $client -c Release "-p:SPTPath=$SPTPath" --nologo
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+# The browser for web pages on screens and computers (Edge WebView2, run beside the game).
+& $dotnet build (Join-Path $root 'Browser\HideoutBrowser.csproj') -c Release --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Browser build failed.' }
+# The co-op link is built against Fika, never ships Fika itself, and is only loaded where Fika is installed.
+$fikaLink = $null
+if ((Test-Path (Join-Path $SPTPath 'BepInEx\plugins\Fika\Fika.Core.dll')) -or (Test-Path (Join-Path $SPTPath '_mods_disabled\BepInEx\plugins\Fika\Fika.Core.dll'))) {
+    & $dotnet build (Join-Path $root "Fika\$name.Fika.csproj") -c Release "-p:SPTPath=$SPTPath" --nologo
+    if ($LASTEXITCODE -ne 0) { throw 'Fika link build failed.' }
+    $fikaLink = Join-Path $root "Fika\bin\Release\$name.Fika.dll"
+    if (-not (Test-Path $fikaLink)) { throw "Missing $fikaLink" }
+}
+else { Write-Warning 'Fika.Core.dll not found: packing without the co-op link.' }
+$browserOut = Join-Path $root 'Browser\bin\Release'
+$browserFiles = @('HideoutBrowser.exe', 'HideoutBrowser.exe.config', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll') |
+    ForEach-Object { Join-Path $browserOut $_ }
+foreach ($f in $browserFiles) { if (-not (Test-Path $f)) { throw "Missing $f" } }
 
 $dll = Join-Path $root "Client\bin\Release\$name.dll"
 $readme = Join-Path $root 'README.md'
@@ -40,7 +56,9 @@ try {
     & $add $dll "BepInEx/plugins/$name/$name.dll"
     & $add $readme "BepInEx/plugins/$name/README.md"
     & $add $license "BepInEx/plugins/$name/LICENSE.txt"
+    if ($fikaLink) { & $add $fikaLink "BepInEx/plugins/$name/$name.Fika.dll" }
     foreach ($picture in $pictures) { & $add $picture.FullName "BepInEx/plugins/$name/$($picture.Name)" }
+    foreach ($f in $browserFiles) { & $add $f "BepInEx/plugins/$name/browser/$(Split-Path $f -Leaf)" }
 }
 finally {
     $archive.Dispose()
@@ -51,6 +69,12 @@ if (-not $NoInstall) {
     $dest = Join-Path $SPTPath "BepInEx\plugins\$name"
     New-Item -ItemType Directory -Force $dest | Out-Null
     Copy-Item $dll, $readme, $license $dest -Force
+    if ($fikaLink) { Copy-Item $fikaLink $dest -Force }
     if ($pictures.Count -gt 0) { Copy-Item -LiteralPath $pictures.FullName -Destination $dest -Force }
+    $browserDest = Join-Path $dest 'browser'
+    New-Item -ItemType Directory -Force $browserDest | Out-Null
+    # A browser still running (from a game that's open) holds its files: closed so they can be replaced.
+    Get-Process HideoutBrowser -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Copy-Item $browserFiles $browserDest -Force
     Write-Host "Installed to $dest (restart the game)"
 }

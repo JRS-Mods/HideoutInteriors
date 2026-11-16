@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using BepInEx.Configuration;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -8,28 +9,31 @@ namespace HideoutInteriors
 {
     /// <summary>
     /// Decor mode's gizmo on the selection, drawn over everything at the same size on screen however far the camera is,
-    /// in two kinds (G, or the panel's MOVE / TURN, switches): arrows (red X, green Y up, blue Z) to slide the selection
-    /// along just that line, and three quarter rings to turn it about X, Y or Z, about the middle of its underside.
-    /// Ctrl steps (5 cm, 15°); the line at the bottom shows where it is or how far it's turned. Its size and thickness
-    /// are in the settings.
+    /// in three kinds (G, or the panel's MOVE / TURN / SIZE, switches): arrows (red X, green Y up, blue Z) to slide the
+    /// selection along just that line, three quarter rings to turn it about X, Y or Z, about the middle of its underside,
+    /// and three handles with a block in the middle to stretch it along one of its own axes or make all of it bigger or
+    /// smaller. Ctrl steps (5 cm, 15°, a tenth); the line at the bottom shows where it is, how far it's turned or how
+    /// big it is. Its size and thickness are in the settings.
     /// </summary>
     internal static partial class Interiors
     {
         internal static ConfigEntry<float> GizmoLength, GizmoThickness;
         internal static ConfigEntry<KeyCode> GizmoKey;
 
-        private enum GizmoKind { Move, Turn }
+        private enum GizmoKind { Move, Turn, Size }
         private static GizmoKind gizmoKind = GizmoKind.Move;
 
         private static GameObject gizmo;
-        private static Transform moveSet, turnSet;
+        private static Transform moveSet, turnSet, sizeSet;
         private static readonly Transform[] rings = new Transform[3];
-        private static readonly Material[] axisMats = new Material[3];
+        // One for each axis, and one for the size handles' middle block (all of it).
+        private const int AllAxes = 3;
+        private static readonly Material[] axisMats = new Material[4];
         private static readonly Vector3[] AxisWays = { Vector3.right, Vector3.up, Vector3.forward };
         // Each ring lies across the other two axes: about X it spans Y and Z, and so on.
         private static readonly Vector3[] RingUp = { Vector3.forward, Vector3.right, Vector3.up };
-        private static readonly Color[] AxisColors = { new Color(.95f, .2f, .2f), new Color(.25f, .9f, .25f), new Color(.25f, .45f, 1f) };
-        private static readonly string[] AxisNames = { "X", "Y", "Z" };
+        private static readonly Color[] AxisColors = { new Color(.95f, .2f, .2f), new Color(.25f, .9f, .25f), new Color(.25f, .45f, 1f), new Color(.9f, .9f, .9f) };
+        private static readonly string[] AxisNames = { "X", "Y", "Z", "all" };
         private static readonly Color AxisHot = new Color(1f, .9f, .2f);
         private static int axisHot = -1, axisDrag = -1;
         private static Vector3 axisOrigin;
@@ -40,6 +44,12 @@ namespace HideoutInteriors
         private static float turnLast;
         private static bool turnByScreen;
         private static Vector2 turnMouse;
+        // A change of size: what each thing was, which way the handle points (the thing's own axis), how big the gizmo
+        // was (a handle dragged its own length doubles the size).
+        private static readonly List<SizeStart> sizeStart = new List<SizeStart>();
+        private static Quaternion sizeTurn = Quaternion.identity;
+        private static Vector3 sizeWay;
+        private static float sizeReach = 1;
 
         // The rings' outside, as a part of the gizmo's size (the arrows' tips are at 1), and how wide their band is.
         private const float RingOuter = .95f, RingBand = .16f;
@@ -50,7 +60,7 @@ namespace HideoutInteriors
                 new ConfigDescription("How big decor mode's move arrows and turn rings are (1 = as made).", new AcceptableValueRange<float>(.3f, 3f)));
             GizmoThickness = config.Bind("Decorating", "Gizmo thickness", 1f,
                 new ConfigDescription("How thick the move arrows and turn rings are (1 = as made).", new AcceptableValueRange<float>(.3f, 3f)));
-            GizmoKey = config.Bind("Decorating", "Switch move / turn", KeyCode.G, "The key that switches decor mode's gizmo between moving and turning.");
+            GizmoKey = config.Bind("Decorating", "Switch move / turn", KeyCode.G, "The key that switches decor mode's gizmo between moving, turning and sizing.");
             // A new thickness: made again.
             GizmoThickness.SettingChanged += (_, __) => { if (gizmo != null) UnityEngine.Object.Destroy(gizmo); gizmo = null; };
         }
@@ -65,17 +75,30 @@ namespace HideoutInteriors
             if (style != null) UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(gizmo, style.scene);
             moveSet = new GameObject("Move").transform; moveSet.SetParent(gizmo.transform, false);
             turnSet = new GameObject("Turn").transform; turnSet.SetParent(gizmo.transform, false);
+            sizeSet = new GameObject("Size").transform; sizeSet.SetParent(gizmo.transform, false);
+            for (int i = 0; i < axisMats.Length; i++)
+            {
+                var made = new Material(shader) { name = "Hideout extensions gizmo " + AxisNames[i] };
+                made.SetInt("_ZTest", (int)CompareFunction.Always);
+                made.SetInt("_ZWrite", 0);
+                made.SetInt("_Cull", (int)CullMode.Off);
+                made.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+                made.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+                made.renderQueue = 5000;
+                made.color = AxisColors[i];
+                axisMats[i] = made;
+            }
+            // The size handles' middle: all of it bigger or smaller.
+            Part(sizeSet, PrimitiveType.Cube, Vector3.zero, Vector3.one * .17f * Mathf.Sqrt(thick), axisMats[AllAxes]);
             for (int i = 0; i < 3; i++)
             {
-                var mat = new Material(shader) { name = "Hideout extensions gizmo " + AxisNames[i] };
-                mat.SetInt("_ZTest", (int)CompareFunction.Always);
-                mat.SetInt("_ZWrite", 0);
-                mat.SetInt("_Cull", (int)CullMode.Off);
-                mat.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
-                mat.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
-                mat.renderQueue = 5000;
-                mat.color = AxisColors[i];
-                axisMats[i] = mat;
+                Material mat = axisMats[i];
+                // A size handle along local up: a shaft and a block.
+                var handle = new GameObject("Size " + AxisNames[i]).transform;
+                handle.SetParent(sizeSet, false);
+                handle.localRotation = Quaternion.FromToRotation(Vector3.up, AxisWays[i]);
+                Part(handle, PrimitiveType.Cylinder, new Vector3(0, .5f, 0), new Vector3(.028f * thick, .4f, .028f * thick), mat);
+                Part(handle, PrimitiveType.Cube, new Vector3(0, .95f, 0), new Vector3(.11f * thick, .11f, .11f * thick), mat);
                 // An arrow along local up: a shaft and a head.
                 var arrow = new GameObject(AxisNames[i]).transform;
                 arrow.SetParent(moveSet, false);
@@ -158,13 +181,20 @@ namespace HideoutInteriors
         // Each frame in decor mode: shown on a selection that isn't being carried.
         private static void Gizmo()
         {
-            bool show = decorOn && !dragging && !boxing && selection.Count > 0 && (axisDrag >= 0 || SelectionPivot(out axisOrigin));
+            bool show = decorOn && !Using && !photoOn && !dragging && !boxing && selection.Count > 0 && (axisDrag >= 0 || SelectionPivot(out axisOrigin));
             if (show && gizmo == null) BuildGizmo();
             if (gizmo == null) return;
             if (gizmo.activeSelf != show) gizmo.SetActive(show);
             if (!show) return;
             moveSet.gameObject.SetActive(gizmoKind == GizmoKind.Move);
             turnSet.gameObject.SetActive(gizmoKind == GizmoKind.Turn);
+            sizeSet.gameObject.SetActive(gizmoKind == GizmoKind.Size);
+            // The size handles point along the thing's own axes (those are what stretch).
+            if (gizmoKind == GizmoKind.Size)
+            {
+                if (axisDrag < 0) sizeTurn = selection.Count == 1 && selection[0] != null ? selection[0].rotation : Quaternion.identity;
+                sizeSet.rotation = sizeTurn;
+            }
             // While an arrow's dragged the arrows go along (the drag itself measures from where they started).
             gizmo.transform.position = axisDrag >= 0 && gizmoKind == GizmoKind.Move ? axisOrigin + AxisWays[axisDrag] * axisMoved : axisOrigin;
             gizmo.transform.localScale = Vector3.one * GizmoSize(axisOrigin);
@@ -180,7 +210,7 @@ namespace HideoutInteriors
                     rings[i].localScale = new Vector3(Vector3.Dot(look, right) < 0 ? -1 : 1, Vector3.Dot(look, up) < 0 ? -1 : 1, 1);
                 }
             }
-            for (int i = 0; i < 3; i++) axisMats[i].color = i == axisHot || i == axisDrag ? AxisHot : AxisColors[i];
+            for (int i = 0; i < axisMats.Length; i++) axisMats[i].color = i == axisHot || i == axisDrag ? AxisHot : AxisColors[i];
         }
 
         private static void HideGizmo()
@@ -189,9 +219,12 @@ namespace HideoutInteriors
             if (gizmo != null) gizmo.SetActive(false);
         }
 
-        private static void SwitchGizmo()
+        private static void SwitchGizmo() => SetGizmo((GizmoKind)(((int)gizmoKind + 1) % 3));
+
+        private static void SetGizmo(GizmoKind kind)
         {
-            gizmoKind = gizmoKind == GizmoKind.Move ? GizmoKind.Turn : GizmoKind.Move;
+            if (gizmoKind == kind || axisDrag >= 0) return;
+            gizmoKind = kind;
             axisHot = -1;
             ModeButtons();
             Status();
@@ -207,26 +240,29 @@ namespace HideoutInteriors
             float size = gizmo.transform.localScale.x, reach = (10 + 4 * GizmoThickness.Value) * Screen.height / 1080f;
             int best = -1;
             float bestGap = reach;
+            // The size handles' middle block first: it's where all three meet.
+            if (gizmoKind == GizmoKind.Size && Screen2(camera, axisOrigin, out Vector2 middle) && Vector2.Distance(mouse, middle) < reach * 1.5f) return AllAxes;
             for (int i = 0; i < 3; i++)
             {
                 float gap = float.MaxValue;
-                if (gizmoKind == GizmoKind.Move)
+                if (gizmoKind != GizmoKind.Turn)
                 {
-                    // Along the arrow, past the first fifth where all three meet.
-                    if (Screen2(camera, axisOrigin + AxisWays[i] * size * .2f, out Vector2 a) && Screen2(camera, axisOrigin + AxisWays[i] * size * 1.07f, out Vector2 b))
+                    // Along the arrow or handle, past the first fifth where all three meet.
+                    Vector3 way = gizmoKind == GizmoKind.Size ? sizeTurn * AxisWays[i] : AxisWays[i];
+                    if (Screen2(camera, axisOrigin + way * size * .2f, out Vector2 a) && Screen2(camera, axisOrigin + way * size * 1.07f, out Vector2 b))
                         gap = SegmentGap(mouse, a, b);
                 }
                 else
                 {
                     // Along the middle of the band, in the quarter it's drawn in.
                     Transform ring = rings[i];
-                    float middle = RingOuter - RingBand * GizmoThickness.Value / 2;
+                    float band = RingOuter - RingBand * GizmoThickness.Value / 2;
                     bool had = false;
                     Vector2 last = default;
                     for (int s = 0; s <= 12; s++)
                     {
                         float t = s * Mathf.PI / 2 / 12;
-                        if (!Screen2(camera, ring.TransformPoint(new Vector3(Mathf.Cos(t), Mathf.Sin(t), 0) * middle), out Vector2 p)) { had = false; continue; }
+                        if (!Screen2(camera, ring.TransformPoint(new Vector3(Mathf.Cos(t), Mathf.Sin(t), 0) * band), out Vector2 p)) { had = false; continue; }
                         if (had) gap = Mathf.Min(gap, SegmentGap(mouse, last, p));
                         last = p; had = true;
                     }
@@ -251,13 +287,15 @@ namespace HideoutInteriors
         }
 
         // How far along an arrow's line the mouse is: the point on the line nearest the mouse's ray.
-        private static bool AlongAxis(int axis, out float along)
+        private static bool AlongAxis(int axis, out float along) => AlongLine(AxisWays[axis], out along);
+
+        private static bool AlongLine(Vector3 u, out float along)
         {
             along = 0;
             Camera camera = ViewCamera();
             if (camera == null) return false;
             Ray ray = MouseRay(camera);
-            Vector3 u = AxisWays[axis], v = ray.direction, w = axisOrigin - ray.origin;
+            Vector3 v = ray.direction, w = axisOrigin - ray.origin;
             float b = Vector3.Dot(u, v), d = Vector3.Dot(u, w), e = Vector3.Dot(v, w);
             float denominator = 1 - b * b;
             if (Mathf.Abs(denominator) < 1e-4f) return false;   // looking straight down the arrow
@@ -284,13 +322,23 @@ namespace HideoutInteriors
             {
                 if (!AlongAxis(axis, out axisFrom)) return;
             }
+            else if (gizmoKind == GizmoKind.Size)
+            {
+                // Several things, or the middle block: all of each. One thing's handle: along that axis of its own.
+                sizeWay = sizeTurn * AxisWays[axis % 3];
+                if (axis != AllAxes && !AlongLine(sizeWay, out axisFrom)) return;
+                turnMouse = Input.mousePosition;
+                sizeReach = Mathf.Max(.01f, gizmo.transform.localScale.x);
+                sizeStart.Clear();
+                foreach (Transform t in selection) if (t != null) sizeStart.Add(StartSize(t));
+            }
             else
             {
                 turnByScreen = !OnRingPlane(axis, out turnFrom);
                 turnMouse = Input.mousePosition;
                 turnLast = 0;
             }
-            axisDrag = axis; axisMoved = 0;
+            axisDrag = axis; axisMoved = gizmoKind == GizmoKind.Size ? 1 : 0;
             axisStart.Clear(); carryCulled.Clear();
             foreach (Transform t in selection)
             {
@@ -305,15 +353,33 @@ namespace HideoutInteriors
             if (Input.GetMouseButtonDown(1))
             {
                 foreach (var (thing, from, turn) in axisStart) if (thing != null) thing.SetPositionAndRotation(from, turn);
+                foreach (SizeStart start in sizeStart) SizeBack(start);
                 EndAxisDrag(false);
                 return;
             }
-            if (gizmoKind == GizmoKind.Move)
+            if (gizmoKind == GizmoKind.Size)
+            {
+                float by = axisMoved;
+                // The middle block: up and to the right is bigger. A handle: dragged its own length, twice the size.
+                if (axisDrag == AllAxes)
+                {
+                    Vector2 moved = (Vector2)Input.mousePosition - turnMouse;
+                    by = Mathf.Pow(2, (moved.x + moved.y) / (240f * Screen.height / 1080f));
+                }
+                else if (AlongLine(sizeWay, out float along)) by = 1 + (along - axisFrom) / sizeReach;
+                if (fine) by = Mathf.Round(by / .1f) * .1f;
+                axisMoved = Mathf.Clamp(by, SmallestSize, BiggestSize);
+                int axis = axisDrag == AllAxes || sizeStart.Count > 1 ? -1 : axisDrag;
+                foreach (SizeStart start in sizeStart) Resize(start, axis, axisMoved);
+            }
+            else if (gizmoKind == GizmoKind.Move)
             {
                 if (AlongAxis(axisDrag, out float along))
                 {
                     axisMoved = along - axisFrom;
                     if (fine) axisMoved = Mathf.Round(axisMoved / .05f) * .05f;
+                    // With the grid on, an arrow moves in the grid's steps.
+                    else if (GridOn) axisMoved = Mathf.Round(axisMoved / GridSize.Value) * GridSize.Value;
                     foreach (var (thing, from, _) in axisStart) if (thing != null) thing.position = from + AxisWays[axisDrag] * axisMoved;
                 }
             }
@@ -338,9 +404,12 @@ namespace HideoutInteriors
         private static void EndAxisDrag(bool keep)
         {
             axisDrag = -1;
-            axisStart.Clear(); carryCulled.Clear();
+            var sized = sizeStart.Select(s => s.Thing).ToList();
+            axisStart.Clear(); carryCulled.Clear(); sizeStart.Clear();
             Physics.SyncTransforms();
             if (keep) Commit(Belong.Own);
+            // A page or video on a face that changed shape: drawn again for it.
+            foreach (Transform t in sized) Reshaped(t);
             Moved();
             Status();
         }

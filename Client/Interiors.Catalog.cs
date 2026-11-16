@@ -48,7 +48,7 @@ namespace HideoutInteriors
 
         private const float PanelWidth = 540, SideWidth = 132, CellWidth = 116, CellHeight = 132, Gap = 4;
         // The grid's width: the panel less its margins and the category list.
-        private const float GridWidth = PanelWidth - 24 - SideWidth - 8;
+        private static float GridWidth => panelW - 24 - SideWidth - 8;
         private static readonly Color Ink = new Color(.85f, .83f, .78f), Dim = new Color(.55f, .54f, .5f), Amber = new Color(1f, .72f, .25f);
 
         // ---- the button ----------------------------------------------------------------------------------------
@@ -124,6 +124,12 @@ namespace HideoutInteriors
 
         // ---- the catalog ---------------------------------------------------------------------------------------
 
+        // The game's customization slots (where the posters and statuettes you own go, set from its Customization
+        // screen) and the models it puts in them. Copied as decor they're a blank stand-in that does nothing.
+        private static bool GameSlot(Transform t) =>
+            t.GetComponentInParent<StashItemModelSpawnPoint>(true) != null || t.GetComponentInParent<StashItemModel>(true) != null
+            || t.GetComponentInChildren<StashItemModelSpawnPoint>(true) != null || t.GetComponentInChildren<StashItemModel>(true) != null;
+
         // Every thing the hideout's areas have, at every level (shown or not), once each by name.
         private static void BuildCatalog()
         {
@@ -134,7 +140,7 @@ namespace HideoutInteriors
                 if (Key(area) == null) continue;
                 foreach (Transform t in area.transform.Cast<Transform>().Where(IsLevel).SelectMany(l => ItemsUnder(l, false)).ToList())
                 {
-                    if (t.GetComponent<DecorTag>() != null || !ForPanel(t.name)) continue;
+                    if (t.GetComponent<DecorTag>() != null || !ForPanel(t.name) || GameSlot(t)) continue;
                     ItemOf(t, out HideoutArea from);
                     if (!MeshBounds(t, out Bounds b) || b.size.x > BiggestItem || b.size.z > BiggestItem || b.size.magnitude < .08f) continue;
                     string name = Pretty(t.name);
@@ -147,13 +153,19 @@ namespace HideoutInteriors
             // And what stands outside the areas' levels: the scene's lamps, barrels, cables and seasonal decorations.
             foreach (var (t, area) in OutsideThings(false).ToList())
             {
-                if (!ForPanel(t.name) || !MeshBounds(t, out Bounds b) || b.size.magnitude < .08f) continue;
+                if (!ForPanel(t.name) || GameSlot(t) || !MeshBounds(t, out Bounds b) || b.size.magnitude < .08f) continue;
                 string name = Pretty(t.name);
                 if (!seen.Add(BaseName(t.name).ToLowerInvariant())) continue;
                 string key = ItemKey(area, t);
                 if (key == null) continue;
                 catalog.Add(new Entry { Key = key, Name = name, Kind = KindOf(t.name), Source = t });
             }
+            // And the rest of what the scene has: parts of things, parts of the rooms, anything under a root the passes
+            // above don't go into.
+            int before = catalog.Count;
+            try { RestOfScene(seen); }
+            catch (Exception e) { Plugin.Log.LogWarning("Decor: the rest of the scene's things couldn't be listed: " + e.Message); }
+            Plugin.Log.LogInfo($"Decor: {before} kinds of thing from the areas and the scene's groups, {catalog.Count - before} more from the rest of the scene.");
             // Different models with the same name (four armchairs): Armchair, Armchair 2, Armchair 3...
             foreach (var same in catalog.GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
             {
@@ -167,28 +179,143 @@ namespace HideoutInteriors
             Plugin.Log.LogInfo($"Decor: {catalog.Count} kinds of thing to put in.");
         }
 
+        // Left out of the rest of the scene: lesser levels of detail and shadow-only meshes (the thing itself is its
+        // LOD0), the mod's own objects and other mods' rooms.
+        private static readonly System.Text.RegularExpressions.Regex LesserPart = new System.Text.RegularExpressions.Regex(
+            @"_lod[1-9]\d*$|_lod_[1-9]|shadow|_sl$|_occluder|_occlusion|^lod[1-9]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+        // The kind for what's too big to be a thing, or is part of the rooms.
+        private const string RoomKind = "Rooms & walls";
+
+        // Every root of the hideout's scene, walked down to the first object that's something to see by itself. What
+        // the areas' levels and the scene's groups gave is already in; this adds what they leave out: the parts things
+        // are made of, the parts of the rooms (walls, floors, pipes: under Rooms & walls), things with a skeleton.
+        private static void RestOfScene(HashSet<string> seen)
+        {
+            if (style == null) return;
+            var had = new HashSet<Transform>(catalog.Where(e => e.Source != null).Select(e => e.Source));
+            foreach (GameObject root in style.scene.GetRootGameObjects())
+            {
+                if (root == null || root.name.StartsWith("Hideout extensions", StringComparison.OrdinalIgnoreCase) || root.name.StartsWith("Hideout Interiors", StringComparison.OrdinalIgnoreCase)) continue;
+                RestUnder(root.transform, root.name == "STYLE", seen, had, 0);
+            }
+        }
+
+        private static void RestUnder(Transform t, bool room, HashSet<string> seen, HashSet<Transform> had, int depth)
+        {
+            if (depth > 24 || t.GetComponent<DecorTag>() != null) return;
+            bool skin = t.GetComponent<SkinnedMeshRenderer>() != null || (t.GetComponent<Animator>() != null && t.GetComponentInChildren<SkinnedMeshRenderer>(true) != null);
+            bool whole = skin || t.GetComponent<LODGroup>() != null || (t.GetComponent<MeshRenderer>() != null && t.GetComponent<MeshFilter>() != null);
+            if (whole)
+            {
+                if (!had.Contains(t)) OfferRest(t, room, seen);
+                return;
+            }
+            foreach (Transform child in t) RestUnder(child, room, seen, had, depth + 1);
+        }
+
+        private static void OfferRest(Transform t, bool room, HashSet<string> seen)
+        {
+            if (t.parent == null || !ForPanel(t.name) || LesserPart.IsMatch(BaseName(t.name)) || GameSlot(t)) return;
+            MeshRenderer own = t.GetComponent<MeshRenderer>();
+            if (own != null && own.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly) return;
+            if (!MeshBounds(t, out Bounds b) || b.size.magnitude < .08f) return;
+            // "bed_lod0" is the bed: once, whichever is met first.
+            string name = System.Text.RegularExpressions.Regex.Replace(BaseName(t.name).ToLowerInvariant(), @"_lod_?0$", "");
+            if (!seen.Add(name) || (name != BaseName(t.name).ToLowerInvariant() && !seen.Add(BaseName(t.name).ToLowerInvariant()))) return;
+            HideoutArea area = t.GetComponentInParent<HideoutArea>(true);
+            if (area != null && Key(area) == null) area = null;
+            string key = area != null ? ItemKey(area, t) : RootKey(t);
+            if (key == null) return;
+            bool big = room || b.size.x > BiggestItem || b.size.z > BiggestItem;
+            catalog.Add(new Entry { Key = key, Name = Pretty(t.name), Kind = big ? RoomKind : KindOf(t.name), Source = t });
+        }
+
 
         // ---- the screen ----------------------------------------------------------------------------------------
 
+        // The camera the screen's drawn for (none: straight on the screen), the size it was laid out for, the panel's
+        // width that fits it, and whether the panel's tucked away (H).
+        private static Camera uiCamera;
+        private static Vector2 builtSize, builtFor;
+        private static float builtScale;
+        private static float panelW = PanelWidth;
+        private static bool panelHidden;
+        private static RectTransform showTab, statusBand;
+        private static readonly Image[] viewButtons = new Image[5];
+
+        // The game's own canvas for the overview's screen: decor mode's screen goes on it, so it's the size the
+        // game's screen is (a screen of our own could be bigger than the window when the game draws at another size).
+        private static Canvas HostCanvas()
+        {
+            if (overlay == null) overlay = UnityEngine.Object.FindObjectOfType<HideoutScreenOverlay>();
+            Canvas c = overlay != null ? overlay.GetComponentInParent<Canvas>() : null;
+            return c != null ? c.rootCanvas : null;
+        }
+
+        // The screen it was laid out on, and the size setting, changed since.
+        private static bool UiSizeChanged() =>
+            ui != null && (builtScale != PanelScale.Value || (((RectTransform)ui.transform).rect.size - builtFor).sqrMagnitude > 4);
+
+        private static void CloseUi()
+        {
+            if (ui != null) UnityEngine.Object.Destroy(ui);
+            ui = null; tipUi = null; tipFor = null;
+            // What was on it went with it.
+            StripGone();
+            CancelAsk();
+            BoxHide();
+        }
+
         private static void BuildUi()
         {
-            if (catalog == null) BuildCatalog();
+            // Using one thing quickly: no panel, so no need to list the hideout (it takes a second).
+            if (catalog == null && !quickUse) BuildCatalog();
             if (font == null)
                 font = overlay != null ? overlay.GetComponentsInChildren<TextMeshProUGUI>(true).Select(t => t.font).FirstOrDefault(f => f != null) : null;
             if (font == null) font = UnityEngine.Object.FindObjectOfType<AreaIcon>()?._currentAreaLevel?.font;
-            buttons.Clear(); tabButtons.Clear(); cells.Clear(); hiddenCells.Clear();
+            buttons.Clear(); tabButtons.Clear(); cells.Clear(); hiddenCells.Clear(); mediaCells.Clear(); mediaThumbs.Clear();
             typing = false;
 
-            ui = new GameObject("Hideout extensions decor screen", typeof(RectTransform));
+            ui = new GameObject("Hideout Interiors decor screen", typeof(RectTransform));
             var canvas = ui.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 25;
-            var scaler = ui.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920, 1080);
-            scaler.matchWidthOrHeight = .5f;
+            // In first person the overview's screen is off: a screen of our own.
+            Canvas host = quickFp ? null : HostCanvas();
+            var outer = (RectTransform)ui.transform;
+            if (host != null)
+            {
+                outer.SetParent(host.transform, false);
+                outer.anchorMin = Vector2.zero; outer.anchorMax = Vector2.one; outer.pivot = new Vector2(.5f, .5f);
+                outer.offsetMin = outer.offsetMax = Vector2.zero; outer.localScale = Vector3.one;
+                ui.layer = host.gameObject.layer;
+                canvas.overrideSorting = true;
+                canvas.sortingOrder = host.sortingOrder + 25;
+            }
+            else
+            {
+                canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                canvas.sortingOrder = 25;
+                var scaler = ui.AddComponent<CanvasScaler>();
+                scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                scaler.referenceResolution = new Vector2(1920, 1080);
+                scaler.matchWidthOrHeight = 1;
+            }
             ui.AddComponent<GraphicRaycaster>();
-            uiRoot = (RectTransform)ui.transform;
+            Canvas.ForceUpdateCanvases();
+            uiCamera = canvas.rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.rootCanvas.worldCamera;
+
+            // Everything in a box the panel's size setting scales.
+            float scale = builtScale = PanelScale.Value;
+            builtFor = outer.rect.size;
+            Vector2 size = outer.rect.size / scale;
+            if (size.x < 400 || size.y < 300) size = new Vector2(1920, 1080) / scale;
+            builtSize = size;
+            uiRoot = UiRect("Scaled", outer, new Vector2(.5f, .5f), new Vector2(.5f, .5f), new Vector2(.5f, .5f));
+            uiRoot.localScale = Vector3.one * scale;
+            uiRoot.sizeDelta = size;
+            panelW = Mathf.Clamp(size.x * .4f, 380, PanelWidth);
+            // The bottom clears the game's menu bar (MAIN MENU, HIDEOUT, CHARACTER...), which is drawn over us.
+            const float top = 60, bottom = MenuBarClear;
+            float panelHeight = size.y - top - bottom;
 
             // A see-through screen over the hideout (not the overview's buttons on the left), so the game's icons don't take the clicks.
             RectTransform catcher = UiRect("Catcher", uiRoot, Vector2.zero, Vector2.one, new Vector2(.5f, .5f));
@@ -196,26 +323,49 @@ namespace HideoutInteriors
             catcher.gameObject.AddComponent<Image>().color = new Color(0, 0, 0, .001f);
 
             panel = UiRect("Panel", uiRoot, new Vector2(1, 0), new Vector2(1, 1), new Vector2(1, 1));
-            panel.offsetMin = new Vector2(-PanelWidth - 12, 130); panel.offsetMax = new Vector2(-12, -80);
-            panel.gameObject.AddComponent<Image>().color = new Color(.06f, .06f, .055f, .93f);
+            panel.offsetMin = new Vector2(-panelW - 12, bottom); panel.offsetMax = new Vector2(-12, -top);
+            panel.gameObject.AddComponent<Image>().color = new Color(.06f, .06f, .055f, .94f);
 
-            Text("Title", panel, "DECORATE", 22, new Vector2(12, -10), new Vector2(300, 30), TextAlignmentOptions.TopLeft, Ink, true);
-            Button(panel, "DONE", new Vector2(-12 - 90, -10), new Vector2(90, 30), CloseDecor, anchorRight: true);
-            moveButton = Button(panel, "MOVE", new Vector2(-12 - 90 - 8 - 150, -10), new Vector2(72, 30), () => { if (gizmoKind != GizmoKind.Move) SwitchGizmo(); }, anchorRight: true);
-            turnButton = Button(panel, "TURN", new Vector2(-12 - 90 - 8 - 76, -10), new Vector2(72, 30), () => { if (gizmoKind != GizmoKind.Turn) SwitchGizmo(); }, anchorRight: true);
-            ModeButtons();
-            Text("Info", panel, "Drag a thing into the hideout to put a copy there. Point at the hideout's things to pick them out.", 14,
-                new Vector2(12, -44), new Vector2(PanelWidth - 24, 36), TextAlignmentOptions.TopLeft, Dim, false);
+            // Row 1: the title, MOVE / TURN / SIZE, hide, DONE (from the right; the title has what's left).
+            float x = -12 - 64;
+            Button(panel, "DONE", new Vector2(x, -10), new Vector2(64, 28), CloseDecor, anchorRight: true);
+            Button(panel, "HIDE", new Vector2(x -= 4 + 52, -10), new Vector2(52, 28), TogglePanel, anchorRight: true);
+            x -= 6;
+            for (int i = gizmoButtons.Length - 1; i >= 0; i--)
+            {
+                var kind = (GizmoKind)i;
+                gizmoButtons[i] = Button(panel, GizmoNames[i], new Vector2(x -= 4 + 54, -10), new Vector2(54, 28), () => SetGizmo(kind), anchorRight: true);
+            }
+            TextMeshProUGUI title = Text("Title", panel, "DECORATE", 22, new Vector2(12, -10), new Vector2(Mathf.Max(40, panelW + x - 20), 30), TextAlignmentOptions.MidlineLeft, Ink, true);
+            title.enableAutoSizing = true; title.fontSizeMin = 11; title.fontSizeMax = 22; title.enableWordWrapping = false;
+
+            // Row 2: the camera views.
+            Text("View", panel, "VIEW", 13, new Vector2(12, -50), new Vector2(44, 24), TextAlignmentOptions.MidlineLeft, Dim, true);
+            float viewWidth = (panelW - 24 - 46 - 4 * 4) / 5;
+            for (int i = 0; i < ViewNames.Length; i++)
+            {
+                var kind = (ViewKind)i;
+                viewButtons[i] = Button(panel, ViewNames[i], new Vector2(12 + 46 + i * (viewWidth + 4), -48), new Vector2(viewWidth, 26), () => SetView(kind), fontSize: 12);
+            }
+
+            // Row 3: the search box.
+            searchBox = UiRect("Search", panel, new Vector2(0, 1), new Vector2(1, 1), new Vector2(.5f, 1));
+            searchBox.offsetMin = new Vector2(12, -114); searchBox.offsetMax = new Vector2(-12, -84);
+            searchBack = searchBox.gameObject.AddComponent<Image>();
+            searchText = Text("Text", searchBox, "", 14, Vector2.zero, Vector2.zero, TextAlignmentOptions.MidlineLeft, Ink, false);
+            searchText.rectTransform.anchorMin = Vector2.zero; searchText.rectTransform.anchorMax = Vector2.one;
+            searchText.rectTransform.offsetMin = new Vector2(10, 0); searchText.rectTransform.offsetMax = new Vector2(-10, 0);
+            searchText.enableWordWrapping = false;
+            SearchLook();
 
             // The categories down the left of the things: a list has room for as many as there come to be (mods add
-            // their own), where a row of tabs ran out of width. Rows get shorter if they'd run off the bottom.
+            // their own). Rows get shorter if they'd run off the bottom.
+            const float listTop = 122, listBottom = 48;
             tabsRow = UiRect("Categories", panel, new Vector2(0, 0), new Vector2(0, 1), new Vector2(0, 1));
-            tabsRow.offsetMin = new Vector2(12, 48); tabsRow.offsetMax = new Vector2(12 + SideWidth, -124);
+            tabsRow.offsetMin = new Vector2(12, listBottom); tabsRow.offsetMax = new Vector2(12 + SideWidth, -listTop);
             var tabs = TabKinds();
             if (!tabs.Contains(tab)) tab = "All";
-            // Before the canvas has laid the panel out, its height at the reference 1080 lines.
-            float listHeight = panel.rect.height > 300 ? panel.rect.height - 124 - 48 : 1080 - 130 - 80 - 124 - 48;
-            float rowHeight = Mathf.Clamp(listHeight / tabs.Count - 2, 16, 26);
+            float rowHeight = Mathf.Clamp((panelHeight - listTop - listBottom) / tabs.Count - 2, 14, 26);
             for (int i = 0; i < tabs.Count; i++)
             {
                 string kind = tabs[i];
@@ -227,38 +377,41 @@ namespace HideoutInteriors
                 label.rectTransform.anchorMin = Vector2.zero; label.rectTransform.anchorMax = Vector2.one;
                 label.rectTransform.offsetMin = new Vector2(8, 0); label.rectTransform.offsetMax = new Vector2(-4, 0);
                 tabButtons.Add((r, label, back, kind));
-                buttons.Add((r, () => { tab = kind; FillTab(); }));
+                buttons.Add((r, () => { if (tab == kind) return; tab = kind; StopTyping(); SearchLook(); FillTab(); }));
             }
 
             viewport = UiRect("Viewport", panel, Vector2.zero, Vector2.one, new Vector2(.5f, .5f));
-            // The search box, over the things.
-            searchBox = UiRect("Search", panel, new Vector2(0, 1), new Vector2(1, 1), new Vector2(.5f, 1));
-            searchBox.offsetMin = new Vector2(12, -116); searchBox.offsetMax = new Vector2(-12, -86);
-            searchBack = searchBox.gameObject.AddComponent<Image>();
-            searchText = Text("Text", searchBox, "", 14, Vector2.zero, Vector2.zero, TextAlignmentOptions.MidlineLeft, Ink, false);
-            searchText.rectTransform.anchorMin = Vector2.zero; searchText.rectTransform.anchorMax = Vector2.one;
-            searchText.rectTransform.offsetMin = new Vector2(10, 0); searchText.rectTransform.offsetMax = new Vector2(-10, 0);
-            SearchLook();
+            viewport.offsetMin = new Vector2(12 + SideWidth + 8, listBottom); viewport.offsetMax = new Vector2(-12, -listTop);
+            viewport.gameObject.AddComponent<RectMask2D>();
+            content = UiRect("Content", viewport, new Vector2(0, 1), new Vector2(1, 1), new Vector2(.5f, 1));
+            content.anchoredPosition = Vector2.zero;
 
-            viewport.offsetMin = new Vector2(12 + SideWidth + 8, 48); viewport.offsetMax = new Vector2(-12, -124);
-
-            // Everything back as the game has it, on a second click.
-            Image reset = Button(panel, "RESET ALL", Vector2.zero, new Vector2(150, 30), ResetClicked);
+            // The bottom: everything back as the game has it (on a second click), and copying the selection.
+            Image reset = Button(panel, "RESET ALL", Vector2.zero, new Vector2(130, 30), ResetClicked);
             resetRect = reset.rectTransform;
             resetRect.anchorMin = resetRect.anchorMax = Vector2.zero; resetRect.pivot = Vector2.zero;
             resetRect.anchoredPosition = new Vector2(12, 10);
             resetLabel = reset.GetComponentInChildren<TextMeshProUGUI>();
             resetArmedUntil = 0;
-            viewport.gameObject.AddComponent<RectMask2D>();
-            content = UiRect("Content", viewport, new Vector2(0, 1), new Vector2(1, 1), new Vector2(.5f, 1));
-            content.anchoredPosition = Vector2.zero;
+            RectTransform copy = Button(panel, "DUPLICATE", Vector2.zero, new Vector2(130, 30), DuplicateSelection).rectTransform;
+            copy.anchorMin = copy.anchorMax = new Vector2(1, 0); copy.pivot = new Vector2(1, 0);
+            copy.anchoredPosition = new Vector2(-12, 10);
 
-            RectTransform band = UiRect("Status", uiRoot, new Vector2(.5f, 0), new Vector2(.5f, 0), new Vector2(.5f, 0));
-            band.anchoredPosition = new Vector2(-PanelWidth / 2 - 6, 56); band.sizeDelta = new Vector2(1440, 58);
-            band.gameObject.AddComponent<Image>().color = new Color(0, 0, 0, .72f);
-            statusText = Text("Text", band, "", 16, Vector2.zero, Vector2.zero, TextAlignmentOptions.Center, Ink, false);
+            // With the panel tucked away: a tab on the right edge to bring it back.
+            showTab = UiRect("Show panel", uiRoot, new Vector2(1, 1), new Vector2(1, 1), new Vector2(1, 1));
+            showTab.anchoredPosition = new Vector2(-12, -top); showTab.sizeDelta = new Vector2(130, 30);
+            showTab.gameObject.AddComponent<Image>().color = new Color(.22f, .21f, .19f, 1);
+            TextMeshProUGUI showLabel = Text("Label", showTab, "DECORATE (H)", 14, Vector2.zero, showTab.sizeDelta, TextAlignmentOptions.Center, Ink, true);
+            showLabel.rectTransform.anchorMin = Vector2.zero; showLabel.rectTransform.anchorMax = Vector2.one; showLabel.rectTransform.offsetMin = showLabel.rectTransform.offsetMax = Vector2.zero;
+            buttons.Add((showTab, TogglePanel));
+
+            // The line of keys along the bottom, left of the panel.
+            statusBand = UiRect("Status", uiRoot, new Vector2(0, 0), new Vector2(1, 0), new Vector2(.5f, 0));
+            statusBand.gameObject.AddComponent<Image>().color = new Color(0, 0, 0, .72f);
+            statusText = Text("Text", statusBand, "", 16, Vector2.zero, Vector2.zero, TextAlignmentOptions.Center, Ink, false);
             statusText.rectTransform.anchorMin = Vector2.zero; statusText.rectTransform.anchorMax = Vector2.one;
             statusText.rectTransform.offsetMin = new Vector2(12, 4); statusText.rectTransform.offsetMax = new Vector2(-12, -4);
+            statusText.enableAutoSizing = true; statusText.fontSizeMin = 10; statusText.fontSizeMax = 16;
 
             box = UiRect("Box", uiRoot, new Vector2(.5f, .5f), new Vector2(.5f, .5f), Vector2.zero);
             box.gameObject.AddComponent<Image>().color = new Color(1f, .72f, .25f, .12f);
@@ -266,12 +419,40 @@ namespace HideoutInteriors
             edge.effectColor = new Color(1f, .72f, .25f, .9f); edge.effectDistance = new Vector2(1.5f, 1.5f);
             box.gameObject.SetActive(false);
 
+            PanelShown();
+            ModeButtons();
             FillTab();
+            Status();
         }
+
+        // H, or the panel's HIDE: the panel out of the way to see more of the hideout, and back.
+        private static void TogglePanel()
+        {
+            panelHidden = !panelHidden;
+            StopTyping();
+            PanelShown();
+        }
+
+        private static void PanelShown()
+        {
+            if (panel == null) return;
+            panel.gameObject.SetActive(!panelHidden);
+            // Using one thing straight from the overview or first person: no way into the panel from here.
+            if (showTab != null) showTab.gameObject.SetActive(panelHidden && !quickUse);
+            if (statusBand != null)
+            {
+                statusBand.offsetMin = new Vector2(180, MenuBarClear);
+                statusBand.offsetMax = new Vector2(panelHidden ? -12 : -panelW - 24, MenuBarClear + 72);
+            }
+        }
+
+        // How high off the bottom decor mode's screen starts: above the game's menu bar.
+        private const float MenuBarClear = 52;
 
         private static RectTransform UiRect(string name, Transform parent, Vector2 min, Vector2 max, Vector2 pivot)
         {
             var r = new GameObject(name, typeof(RectTransform)).GetComponent<RectTransform>();
+            r.gameObject.layer = parent.gameObject.layer;
             r.SetParent(parent, false);
             r.anchorMin = min; r.anchorMax = max; r.pivot = pivot;
             return r;
@@ -289,7 +470,8 @@ namespace HideoutInteriors
             return t;
         }
 
-        private static Image moveButton, turnButton;
+        private static readonly Image[] gizmoButtons = new Image[3];
+        private static readonly string[] GizmoNames = { "MOVE", "TURN", "SIZE" };
         private static RectTransform resetRect;
         private static TextMeshProUGUI resetLabel;
         private static float resetArmedUntil;
@@ -326,6 +508,7 @@ namespace HideoutInteriors
         private static void ResetAll()
         {
             int things = 0, copies = decorObjects.Count;
+            Checkpoint();
             foreach (string key in itemLayout.Keys.ToList())
             {
                 Transform t = Resolve(key);
@@ -339,25 +522,31 @@ namespace HideoutInteriors
             ThingsChanged();
             SaveItems(); SaveDecor();
             Outlines(); Status(); RefreshHiddenTab();
-            EFT.Communications.NotificationManager.DisplayMessageNotification($"The hideout is as the game has it: {things} thing(s) back, {copies} decoration(s) gone.");
+            RefreshRows();
+            EFT.Communications.NotificationManager.DisplayMessageNotification($"The hideout is as the game has it: {things} thing(s) back, {copies} decoration(s) gone. Ctrl+Z brings it all back.");
             Plugin.Log.LogInfo($"Decor: reset, {things} thing(s) back, {copies} decoration(s) gone.");
         }
 
-        // The panel's MOVE / TURN: the gizmo's kind lit up.
+        private static readonly Color ButtonOn = new Color(.42f, .33f, .14f, 1), ButtonOff = new Color(.22f, .21f, .19f, 1);
+
+        // The panel's MOVE / TURN / SIZE and the view on: lit up.
         private static void ModeButtons()
         {
-            if (moveButton != null) moveButton.color = gizmoKind == GizmoKind.Move ? new Color(.42f, .33f, .14f, 1) : new Color(.22f, .21f, .19f, 1);
-            if (turnButton != null) turnButton.color = gizmoKind == GizmoKind.Turn ? new Color(.42f, .33f, .14f, 1) : new Color(.22f, .21f, .19f, 1);
+            for (int i = 0; i < gizmoButtons.Length; i++)
+                if (gizmoButtons[i] != null) gizmoButtons[i].color = (int)gizmoKind == i ? ButtonOn : ButtonOff;
+            for (int i = 0; i < viewButtons.Length; i++)
+                if (viewButtons[i] != null) viewButtons[i].color = (int)view == i ? ButtonOn : ButtonOff;
         }
 
-        private static Image Button(RectTransform parent, string label, Vector2 at, Vector2 size, Action click, bool anchorRight = false)
+        private static Image Button(RectTransform parent, string label, Vector2 at, Vector2 size, Action click, bool anchorRight = false, float fontSize = 15)
         {
             RectTransform r = UiRect("Button " + label, parent, anchorRight ? new Vector2(1, 1) : new Vector2(0, 1), anchorRight ? new Vector2(1, 1) : new Vector2(0, 1), new Vector2(0, 1));
             r.anchoredPosition = at; r.sizeDelta = size;
             Image back = r.gameObject.AddComponent<Image>();
-            back.color = new Color(.22f, .21f, .19f, 1);
-            TextMeshProUGUI t = Text("Label", r, label, 15, Vector2.zero, size, TextAlignmentOptions.Center, Ink, true);
-            t.rectTransform.anchorMin = Vector2.zero; t.rectTransform.anchorMax = Vector2.one; t.rectTransform.offsetMin = t.rectTransform.offsetMax = Vector2.zero;
+            back.color = ButtonOff;
+            TextMeshProUGUI t = Text("Label", r, label, fontSize, Vector2.zero, size, TextAlignmentOptions.Center, Ink, true);
+            t.rectTransform.anchorMin = Vector2.zero; t.rectTransform.anchorMax = Vector2.one; t.rectTransform.offsetMin = new Vector2(2, 0); t.rectTransform.offsetMax = new Vector2(-2, 0);
+            t.enableAutoSizing = true; t.fontSizeMin = 8; t.fontSizeMax = fontSize; t.enableWordWrapping = false;
             buttons.Add((r, click));
             return back;
         }
@@ -365,13 +554,21 @@ namespace HideoutInteriors
         private static void FillTab()
         {
             if (content == null) return;
+            if (catalog == null && !IsRowTab(tab) && tab != "Hidden" && tab != MediaKind)
+            {
+                if (panelHidden) return;
+                BuildCatalog();
+            }
             foreach (Transform child in content) UnityEngine.Object.Destroy(child.gameObject);
-            cells.Clear(); hiddenCells.Clear();
+            cells.Clear(); hiddenCells.Clear(); mediaCells.Clear(); mediaThumbs.Clear();
             foreach (var (rect, label, back, kind) in tabButtons)
             {
-                back.color = kind == tab ? new Color(.42f, .33f, .14f, 1) : new Color(.16f, .155f, .14f, 1);
+                back.color = kind == tab ? ButtonOn : new Color(.16f, .155f, .14f, 1);
                 label.text = CategoryLabel(kind);
+                label.color = OwnTabs.Contains(kind) || kind == MediaKind ? Amber : Ink;
             }
+            // The panel's own lists: buttons and rows, not pictures.
+            if (IsRowTab(tab)) { FillRows(); return; }
             int columns = Mathf.Max(1, Mathf.FloorToInt((GridWidth + Gap) / (CellWidth + Gap)));
             int n = 0;
             if (tab == "Hidden")
@@ -383,20 +580,66 @@ namespace HideoutInteriors
                     hiddenCells.Add((cell, entry.Key));
                 }
             }
+            else if (tab == MediaKind) n = FillMedia(columns);
             else
             {
-                foreach (Entry e in catalog)
+                // Favourites and Recent pick from every kind.
+                IEnumerable<Entry> own = OwnTabEntries(tab);
+                foreach (Entry e in own ?? catalog)
                 {
-                    if (tab != "All" && e.Kind != tab) continue;
+                    if (own == null && tab != "All" && e.Kind != tab) continue;
                     if (query.Length > 0 && e.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
                     if (e.Source == null) continue;
                     e.Cell = Cell(n++, columns, ExtraLabel(e), e.Picture, out e.Image, out e.Label);
+                    if (IsFavourite(e.Key)) e.Label.color = Amber;
                     cells.Add((e.Cell, e));
+                }
+                if (n == 0 && own != null)
+                {
+                    TextMeshProUGUI none = Text("None", content, tab == FavTab
+                        ? "No favourites yet. Right-click a thing in any tab to make it one: it's here from then on (its name is amber wherever it shows)."
+                        : "Nothing taken from the panel yet. The things you put in show here, the last first.", 13, new Vector2(4, -6), new Vector2(GridWidth - 8, 80), TextAlignmentOptions.TopLeft, Dim, false);
+                    none.overflowMode = TextOverflowModes.Overflow;
                 }
             }
             int rows = (n + columns - 1) / columns;
             content.sizeDelta = new Vector2(0, rows * (CellHeight + Gap));
             content.anchoredPosition = Vector2.zero;
+        }
+
+        // ---- the Media tab: posters and screens -------------------------------------------------------------------
+
+        // The Media tab's cells, and what a click on each does: a poster, a screen and a computer to put in blank (what's
+        // on one is chosen on it, once it's in), then the media folder's files, each put in already showing.
+        private static readonly List<(RectTransform rect, Action click)> mediaCells = new List<(RectTransform, Action)>();
+        private static readonly List<(RawImage image, string file)> mediaThumbs = new List<(RawImage, string)>();
+        private static readonly Color ScreenOff = new Color(.03f, .03f, .035f, 1);
+
+        private static int FillMedia(int columns)
+        {
+            int n = 0;
+            MediaCell(ref n, columns, "<b>Poster</b>\n<size=11>drag in, then click it</size>", null, () => StartPlacingMedia(PosterKey, null, true));
+            MediaCell(ref n, columns, "<b>TV screen</b>\n<size=11>drag in, then click it</size>", ScreenOff, () => StartPlacingMedia(ScreenKey, null, true));
+            MediaCell(ref n, columns, "<b>Computer</b>\n<size=11>drag in, then click it</size>", ScreenOff, () => StartPlacingMedia(ComputerKey, null, true));
+            MediaCell(ref n, columns, "<b>Open the media folder</b>\n<size=11>your pictures and videos</size>", null, OpenMediaFolder);
+            foreach (string file in MediaFiles())
+            {
+                if (query.Length > 0 && file.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                bool video = IsVideo(file);
+                string chosen = file;
+                RawImage image = MediaCell(ref n, columns, (video ? "<color=#ffb840>VIDEO</color> " : "") + file, video ? ScreenOff : (Color?)null,
+                    () => StartPlacingMedia(video ? ScreenKey : PosterKey, chosen, true));
+                if (!video) mediaThumbs.Add((image, file));
+            }
+            return n;
+        }
+
+        private static RawImage MediaCell(ref int n, int columns, string label, Color? colour, Action click)
+        {
+            RectTransform cell = Cell(n++, columns, label, null, out RawImage image, out _);
+            if (colour != null) image.color = colour.Value;
+            mediaCells.Add((cell, click));
+            return image;
         }
 
         private static RectTransform Cell(int index, int columns, string name, Texture2D picture, out RawImage image, out TextMeshProUGUI label)
@@ -425,14 +668,21 @@ namespace HideoutInteriors
         // A category's row: its name and how many things are in it.
         private static string CategoryLabel(string kind)
         {
+            if (kind == MediaKind) return $"{kind} <color=#8a877f>{MediaFiles().Count}</color>";
+            if (kind == ToolsTab) return kind;
+            if (kind == FavTab) return $"{kind} <color=#8a877f>{Prefs().Favourites.Count}</color>";
+            if (kind == RecentTab) return $"{kind} <color=#8a877f>{Prefs().Recent.Count}</color>";
+            if (kind == PlacedTab) return $"{kind} <color=#8a877f>{decorLayout.Count}</color>";
+            if (kind == PrefabTab) return $"{kind} <color=#8a877f>{KeptFiles("prefabs").Count}</color>";
+            if (kind == LayoutTab) return $"{kind} <color=#8a877f>{KeptFiles("layouts").Count}</color>";
             int n = kind == "Hidden" ? itemLayout.Count(e => e.Value.Hidden)
                 : catalog == null ? 0 : kind == "All" ? catalog.Count(e => e.Source != null) : catalog.Count(e => e.Kind == kind && e.Source != null);
             return $"{kind} <color=#8a877f>{n}</color>";
         }
 
-        private static bool Inside(RectTransform r, Vector2 screen) => r != null && r.gameObject.activeInHierarchy && RectTransformUtility.RectangleContainsScreenPoint(r, screen, null);
+        private static bool Inside(RectTransform r, Vector2 screen) => r != null && r.gameObject.activeInHierarchy && RectTransformUtility.RectangleContainsScreenPoint(r, screen, uiCamera);
 
-        private static bool OverPanel(Vector2 screen) => ui != null && Inside(panel, screen);
+        private static bool OverPanel(Vector2 screen) => ui != null && (Inside(panel, screen) || Inside(showTab, screen));
 
         // The search box: a dark field, the text typed (or what it's for) and a caret while it has the keyboard.
         private static void SearchLook()
@@ -440,20 +690,26 @@ namespace HideoutInteriors
             if (searchText == null) return;
             searchBack.color = typing ? new Color(.2f, .19f, .17f, 1) : new Color(.13f, .125f, .115f, 1);
             bool caret = typing && (int)(Time.unscaledTime * 2) % 2 == 0;
-            searchText.text = query.Length == 0 && !typing ? "<color=#8a877f>Search...</color>" : query + (caret ? "|" : "");
+            string hint = tab == MediaKind ? "Search your files..." : "Search...";
+            searchText.text = query.Length == 0 && !typing ? $"<color=#8a877f>{hint}</color>" : Plain(query) + (caret ? "|" : "");
         }
 
-        // Each frame while the box has the keyboard: letters typed go in, Backspace takes one off, Enter or Escape is done.
+        // Each frame while the box has the keyboard: letters typed go in, Backspace takes one off, Ctrl+V pastes,
+        // Enter or Escape is done.
         private static void Typing()
         {
             if (!typing) return;
+            typedFrame = Time.frameCount;
             string before = query;
-            foreach (char c in Input.inputString)
-            {
-                if (c == (char)8) { if (query.Length > 0) query = query.Substring(0, query.Length - 1); }
-                else if (c == (char)10 || c == (char)13) { typing = false; }
-                else if (!char.IsControl(c) && query.Length < 30) query += c;
-            }
+            if (Ctrl() && Input.GetKeyDown(KeyCode.V)) query += (GUIUtility.systemCopyBuffer ?? "").Trim();
+            else
+                foreach (char c in Input.inputString)
+                {
+                    if (c == '\b') { if (query.Length > 0) query = query.Substring(0, query.Length - 1); }
+                    else if (c == '\n' || c == '\r') typing = false;
+                    else if (!char.IsControl(c)) query += c;
+                }
+            if (query.Length > 30) query = query.Substring(0, 30);
             if (query != before) FillTab();
             SearchLook();
         }
@@ -467,15 +723,18 @@ namespace HideoutInteriors
 
         private static void PanelClick(Vector2 mouse)
         {
-            if (Inside(searchBox, mouse)) { typing = true; SearchLook(); return; }
+            if (Inside(searchBox, mouse)) { typing = true; typedFrame = Time.frameCount; SearchLook(); return; }
             StopTyping();
             foreach (var (rect, click) in buttons.ToList())
                 if (Inside(rect, mouse)) { click(); return; }
             if (!Inside(viewport, mouse)) return;
+            foreach (var (rect, click) in mediaCells.ToList())
+                if (Inside(rect, mouse)) { click(); return; }
             foreach (var (rect, key) in hiddenCells.ToList())
                 if (Inside(rect, mouse))
                 {
                     Transform t = Resolve(key);
+                    Checkpoint();
                     if (t != null) KeepItem(t, key, OwnerOf(key), hidden: false);
                     SaveItems();
                     RefreshHiddenTab();
@@ -491,9 +750,18 @@ namespace HideoutInteriors
             if (entry.Source == null || !RoomForAnother(entry)) return;
             Transform copy = MakeCopy(entry.Source, DecorRoot(), false);
             if (copy == null) { EFT.Communications.NotificationManager.DisplayWarningNotification($"{entry.Name} couldn't be copied."); return; }
+            Recently(entry.Key);
+            // A thing with a skeleton stands in its modelling pose unless its animations play.
+            if (AliveFromTheStart(entry.Source))
+            {
+                DecorTag tag = copy.GetComponent<DecorTag>();
+                tag.Meta.Alive = true;
+                ApplyMeta(copy, tag.Meta, true);
+            }
             ClearSelection();
             Select(copy);
-            newCopy = copy;
+            newCopies.Add(copy);
+            fromPanel = true;
             StartDrag(copy);
             Drag();
             Outlines();
@@ -511,8 +779,8 @@ namespace HideoutInteriors
         {
             if (box == null) return;
             if ((a - b).magnitude < 6) { box.gameObject.SetActive(false); return; }
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(uiRoot, Vector2.Min(a, b), null, out Vector2 lo);
-            RectTransformUtility.ScreenPointToLocalPointInRectangle(uiRoot, Vector2.Max(a, b), null, out Vector2 hi);
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(uiRoot, Vector2.Min(a, b), uiCamera, out Vector2 lo);
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(uiRoot, Vector2.Max(a, b), uiCamera, out Vector2 hi);
             box.anchoredPosition = lo; box.sizeDelta = hi - lo;
             box.gameObject.SetActive(true);
         }
@@ -553,6 +821,10 @@ namespace HideoutInteriors
         private static void Status()
         {
             if (statusText == null) return;
+            if (Using) { statusText.text = UseText(); return; }
+            if (asking) { statusText.text = $"<b>{Plain(askTitle).ToUpperInvariant()}</b>\nType, then Enter · Ctrl+V: paste · Esc or a click: never mind"; return; }
+            if (quickUse) { statusText.text = QuickText(); return; }
+            string viewLine = ViewText();
             if (dragging)
             {
                 if (Time.frameCount - statusFrame < 6) return;
@@ -560,8 +832,12 @@ namespace HideoutInteriors
                 Transform first = carrying.Count > 0 ? carrying[0].Thing : null;
                 Vector3? at = first != null && Bounds(first, out Bounds b) ? b.center : (Vector3?)null;
                 string what = carrying.Count == 1 && first != null ? Pretty(first.name).ToUpperInvariant() : carrying.Count + " THINGS";
-                statusText.text = $"<b>MOVING {what}</b> · belongs to {BelongText(at)}\nLet go to put down · R: turn (Shift+R: 15°) · T: change whom it belongs to · Right-click: cancel"
-                                  + (newCopy != null ? " · let go over the panel: put back" : "");
+                string put = clickToPut ? "Click to put down" : "Let go to put down";
+                string media = carrying.Count == 1 && IsMedia(first)
+                    ? (tvHover != null ? $" · on {Pretty(tvHover.name)} (Alt: not fitted)" : " · flat on walls, standing on floors · R: turn on the wall")
+                    : " · R: turn (Shift+R: 15°)" + (Snap.Value != SnapKind.Off ? $" · snapping to {SnapText()} (Alt: not)" : " · N: snapping");
+                statusText.text = viewLine + $"<b>MOVING {what}</b> · belongs to {BelongText(at)}\n{put}{media} · T: whom it belongs to · Right-click: cancel"
+                                  + (fromPanel ? " · let go over the panel: put back" : "");
                 return;
             }
             selection.RemoveAll(t => t == null);
@@ -570,34 +846,51 @@ namespace HideoutInteriors
                 int a = axisDrag >= 0 ? axisDrag : axisHot;
                 string what = selection.Count == 1 ? Pretty(selection[0].name).ToUpperInvariant() : selection.Count + " THINGS";
                 SelectionPivot(out Vector3 at);
-                if (gizmoKind == GizmoKind.Turn)
-                    statusText.text = axisDrag >= 0
+                if (gizmoKind == GizmoKind.Size)
+                {
+                    bool all = a == AllAxes || selection.Count > 1;
+                    string along = all ? "all of it" : $"along its own {AxisNames[a]}";
+                    string size = selection.Count == 1 ? SizeText(selection[0]) : $"{axisMoved:0.00} x";
+                    statusText.text = viewLine + (axisDrag >= 0
+                        ? $"<b>{what}</b> · {along} · {size}\nLet go to keep · Ctrl: steps of a tenth · Right-click: cancel"
+                        : $"<b>{what}</b> · {size}\nDrag {(a == AllAxes ? "the middle block: all of it bigger or smaller" : all ? "a handle: all of them bigger or smaller" : $"the {AxisNames[a]} handle to stretch it along its own {AxisNames[a]}")} (Ctrl: steps of a tenth) · {GizmoKey.Value}: move arrows");
+                }
+                else if (gizmoKind == GizmoKind.Turn)
+                    statusText.text = viewLine + (axisDrag >= 0
                         ? $"<b>{what}</b> · turning about {AxisNames[a]} {(axisMoved >= 0 ? "+" : "")}{axisMoved:0}°\nLet go to put down · Ctrl: 15° steps · Right-click: cancel"
-                        : $"<b>{what}</b> · at {Where(at)}\nDrag the {AxisNames[a]} ring to turn about {AxisNames[a]} (Ctrl: 15° steps) · {GizmoKey.Value}: move arrows";
+                        : $"<b>{what}</b> · at {Where(at)}\nDrag the {AxisNames[a]} ring to turn about {AxisNames[a]} (Ctrl: 15° steps) · {GizmoKey.Value}: size handles");
                 else
-                    statusText.text = axisDrag >= 0
+                    statusText.text = viewLine + (axisDrag >= 0
                         ? $"<b>{what}</b> · along {AxisNames[a]} {(axisMoved >= 0 ? "+" : "")}{axisMoved:0.00} m · at {Where(at)}\nLet go to put down · Ctrl: 5 cm steps · Right-click: cancel"
-                        : $"<b>{what}</b> · at {Where(at)}\nDrag the {AxisNames[a]} arrow to move along {AxisNames[a]} only (Ctrl: 5 cm steps) · {GizmoKey.Value}: turn rings";
+                        : $"<b>{what}</b> · at {Where(at)}\nDrag the {AxisNames[a]} arrow to move along {AxisNames[a]} only (Ctrl: 5 cm steps) · {GizmoKey.Value}: turn rings");
                 return;
             }
             if (iconHovered != null)
             {
-                statusText.text = selection.Count > 0
+                statusText.text = viewLine + (selection.Count > 0
                     ? $"<b>{Name(iconHovered).ToUpperInvariant()}</b>\nClick: the {(selection.Count == 1 ? Pretty(selection[0].name) : selection.Count + " selected things")} belong{(selection.Count == 1 ? "s" : "")} to {Name(iconHovered)} from now on (outlined with it, moving with it)"
-                    : $"<b>{Name(iconHovered).ToUpperInvariant()}</b>\nSelect things first, then click this icon to give them to {Name(iconHovered)}";
+                    : $"<b>{Name(iconHovered).ToUpperInvariant()}</b>\nSelect things first, then click this icon to give them to {Name(iconHovered)}");
                 return;
             }
             if (selection.Count > 0)
             {
                 bool decor = selection.All(t => t.GetComponent<DecorTag>() != null);
-                string what = selection.Count == 1 ? $"{Pretty(selection[0].name).ToUpperInvariant()}</b> · {OwnerText(selection[0])}" : $"{selection.Count} SELECTED</b>";
-                statusText.text = $"<b>{what}\nDrag to move · R: turn · {GizmoKey.Value}: {(gizmoKind == GizmoKind.Move ? "turn rings" : "move arrows")} · T: puts down in {BelongText(null)} · Click an area's icon: give to it · Delete: {(decor ? "remove" : "hide")} · Backspace: the game's spot · Esc: done";
+                bool media = selection.Any(IsMedia), tv = selection.Any(IsTv);
+                bool lit = selection.Any(HasLights);
+                string what = selection.Count == 1 ? $"{Plain(NameOf(selection[0])).ToUpperInvariant()}</b> · {OwnerText(selection[0])}{MediaText(selection[0])}{MetaText(selection[0])}" : $"{selection.Count} SELECTED</b>";
+                string extra = media ? (selection.Count == 1 ? IsPoster(selection[0]) ? " · click it again: paste a link" : " · click it again (U): " + (IsComputer(selection[0]) ? "use it" : "watch it") : "") + " · Ctrl+V: the copied link · P: pause · M: mute"
+                    : tv ? " · Ctrl+V: a screen on it playing the copied link" : "";
+                if (lit && !media) extra += " · O: light switch";
+                string many = selection.Count > 1 ? " · Ctrl+G: group · Tools tab: line up, space, flip" : " · F2: name · X / Z: flip";
+                statusText.text = viewLine + $"<b>{what}\nDrag · R: turn · +/-: size · {GizmoKey.Value}: {NextGizmo()} · Ctrl+D: copy{extra}{many} · L: lock · Ctrl+Z: undo · Delete: {(decor ? "remove" : "hide")} · Backspace: the game's spot";
             }
             else if (hovered != null)
-                statusText.text = $"<b>{Pretty(hovered.name).ToUpperInvariant()}</b> · {OwnerText(hovered)}\nClick to select · Shift+click to add · drag on the floor to box-select · Esc: done";
+                statusText.text = viewLine + $"<b>{Plain(NameOf(hovered)).ToUpperInvariant()}</b> · {OwnerText(hovered)}{MediaText(hovered)}{MetaText(hovered)}\nClick to select · Shift+click or Shift+drag to add · drag on the floor to box-select · Ctrl+A: all on screen · Esc: done";
             else
-                statusText.text = $"<b>DECOR MODE</b> · what you put down belongs to {BelongText(null)} (T to change)\nPoint at a thing to outline it · click to select · drag on the floor to box-select · drag from the panel to add · Esc: done";
+                statusText.text = viewLine + $"<b>DECOR MODE</b> · what you put down belongs to {BelongText(null)} (T to change)\nClick a thing to select · drag (Shift+drag from anywhere) to box-select · drag from the panel to add (posters, screens and computers: the Media tab) · Ctrl+V: what's copied (things, a layout, a link) · Ctrl+Z / Ctrl+Y: undo, redo · N: snapping ({SnapText()}) · V: camera views · C: photo mode · H: hide the panel · the Tools tab has the rest · Esc: done";
         }
+
+        private static string NextGizmo() => gizmoKind == GizmoKind.Move ? "turn rings" : gizmoKind == GizmoKind.Turn ? "size handles" : "move arrows";
 
         // ---- pictures ------------------------------------------------------------------------------------------
 
@@ -606,10 +899,18 @@ namespace HideoutInteriors
         private static RenderTexture studioTarget;
         private const int StudioLayer = 31;
 
-        // One picture a frame, of the next thing on show in the panel without one.
+        // One picture a frame, of the next thing on show in the panel without one (and the media folder's pictures).
         private static void Thumbnails()
         {
             if (ui == null || tab == "Hidden") return;
+            if (tab == MediaKind)
+            {
+                if (mediaThumbs.Count == 0) return;
+                var (image, file) = mediaThumbs[0];
+                mediaThumbs.RemoveAt(0);
+                LoadPicture(file, picture => { if (image != null && picture != null) { image.texture = picture; image.color = Color.white; } });
+                return;
+            }
             float height = viewport.rect.height, scroll = content.anchoredPosition.y;
             foreach (var (rect, entry) in cells)
             {
@@ -623,7 +924,6 @@ namespace HideoutInteriors
                 return;
             }
         }
-
         // The game's materials use its own shaders, which only draw for its own cameras (deferred, with its lighting
         // steps): for the picture each is swapped for Unity's Standard shader with the same texture, colour and normal
         // map. Shadow-only meshes (the _SHADOW_LODs) are left out, and only the most detailed LOD shows.

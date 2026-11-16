@@ -13,12 +13,14 @@ namespace HideoutInteriors
         /// <summary>
         /// Puts a <see cref="RaidCopySnapshot"/> (this player's, or the host's in co-op) into the hideout scene that's loaded as
         /// the raid's map, after its areas are where they'll stand. It all goes with the raid; the hideout's own files are left alone.
+        /// Since 1.0.0 the mod also does this by itself a few seconds into a raid on a hideout ("Show my layout in hideout raids"):
+        /// calling this, before or after, replaces what that put in, so a mod that moves the areas should still call it.
         /// </summary>
         public static void BuildRaidCopy(string snapshot) => Interiors.BuildRaidCopy(snapshot);
 
         /// <summary>
         /// Adds a thing of your mod's to decor mode's panel, under <paramref name="kind"/>: one of the panel's tabs (Storage,
-        /// Furniture, Lights, Electronics, Food, Tools, Junk or Other), or a name of your own, which becomes a tab of its own
+        /// Furniture, Lighting, Electronics, Kitchen, Building &amp; tools, Junk or Other: "Tools" and "Building" go under Building &amp; tools), or a name of your own, which becomes a tab of its own
         /// after those. <paramref name="make"/> builds one, which the copies are taken from: its look and lights are kept, and
         /// the copies get one box collider round them on its layer. Placed ones are kept by <paramref name="key"/>, so call
         /// this every game, at startup.

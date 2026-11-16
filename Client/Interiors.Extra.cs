@@ -31,8 +31,8 @@ namespace HideoutInteriors
         internal static void AddExtra(string key, string name, string kind, Func<GameObject> make, int limit = 0)
         {
             if (string.IsNullOrEmpty(key) || make == null) return;
-            kind = string.IsNullOrWhiteSpace(kind) ? "Other" : kind.Trim();
-            if (kind == "All" || kind == "Hidden") kind = "Other";
+            kind = OneKind(string.IsNullOrWhiteSpace(kind) ? "Other" : kind.Trim());
+            if (kind == "All" || kind == "Hidden" || kind == MediaKind || OwnTabs.Contains(kind)) kind = "Other";
             // The panel's built each time it opens, so a new tab is there from the next time.
             if (!Kinds.Contains(kind) && !extraKinds.Contains(kind)) extraKinds.Add(kind);
             extras[ExtraPrefix + key] = new Extra { Name = string.IsNullOrEmpty(name) ? key : name, Kind = kind, Make = make, Limit = Mathf.Max(0, limit) };
@@ -44,6 +44,10 @@ namespace HideoutInteriors
         private static List<string> TabKinds()
         {
             var tabs = Kinds.Where(k => k != "Hidden").ToList();
+            // Posters and screens, just after All.
+            tabs.Insert(1, MediaKind);
+            // The panel's own lists, before the kinds of thing.
+            tabs.InsertRange(2, OwnTabs);
             tabs.AddRange(extraKinds);
             tabs.Add("Hidden");
             return tabs;
@@ -119,6 +123,8 @@ namespace HideoutInteriors
         {
             foreach (var pair in extras.ToList())
             {
+                // Posters, screens and computers have a tab of their own.
+                if (IsMediaKey(pair.Key)) continue;
                 Transform pattern = ExtraPattern(pair.Key);
                 if (pattern != null) yield return new Entry { Key = pair.Key, Name = pair.Value.Name, Kind = pair.Value.Kind, Source = pattern };
             }

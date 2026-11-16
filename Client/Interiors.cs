@@ -50,8 +50,8 @@ namespace HideoutInteriors
         {
             if (style == null)
             {
-                if (visited) { visited = false; raidCopy = false; HideTip(); ForgetItems(); areaList = null; owner = null; rear = null; profileId = null; }
-                if (!Decorating.Value || (style = FindStyle()) == null) return;
+                if (visited) { visited = false; raidCopy = false; HideTip(); ForgetItems(); areaList = null; owner = null; rear = null; profileId = null; quickHover = null; }
+                if (!Decorating.Value || (style = FindStyle()) == null) { RaidLook(); return; }
                 if (!LoadProfile()) { style = null; return; }   // no profile yet: next time
                 visited = true;
                 settleUntil = Time.unscaledTime + 20;
@@ -64,8 +64,12 @@ namespace HideoutInteriors
                 // The areas set themselves up a moment after the hideout loads: things kept go back as they do.
                 if (Time.unscaledTime < settleUntil && Time.frameCount % 30 == 0) PlaceAll();
                 ItemOutline.Apply();
+                MediaTick();
+                WebTick();
+                MotionTick();
                 if (decorOn) DecorTick();
-                else HideTip();
+                else { HideTip(); QuickTick(); }
+                if (decorOn && quickFp) FreeCursor();
                 if (Overview()) DecorButton();
             }
             catch (Exception e)
@@ -179,6 +183,15 @@ namespace HideoutInteriors
                 Snapshot snapshot = string.IsNullOrEmpty(json) ? new Snapshot() : JsonConvert.DeserializeObject<Snapshot>(json) ?? new Snapshot();
                 GameObject found = GameObject.Find("STYLE");
                 if (found == null) { Plugin.Log.LogWarning("No hideout in this raid's scene to put the things into."); return; }
+                // Put in once already this raid (this mod's own look found the hideout first, or the host's layout came
+                // late): what that put in is taken out, so this goes into the hideout as the raid loaded it.
+                if (raidCopy && style == found)
+                {
+                    foreach (string key in itemLayout.Keys.ToList())
+                        if (Resolve(key) is Transform there) RestoreItem(there, key);
+                    if (decorRoot != null) UnityEngine.Object.Destroy(decorRoot);
+                }
+                raidCopyOurs = false;
                 // Whatever the menus' hideout had is gone with it.
                 if (visited) { HideTip(); ForgetItems(); }
                 style = found;
@@ -221,7 +234,10 @@ namespace HideoutInteriors
         private static Ray MouseRay(Camera camera)
         {
             Vector3 mouse = Input.mousePosition;
-            return camera.ViewportPointToRay(new Vector3(mouse.x / Screen.width, mouse.y / Screen.height, 0));
+            var viewport = new Vector3(mouse.x / Screen.width, mouse.y / Screen.height, 0);
+            // In first person in front of a screen: from where the camera's drawn from, not the player's eyes.
+            if (FpRay(camera, viewport, out Ray framed)) return framed;
+            return camera.ViewportPointToRay(viewport);
         }
     }
 }

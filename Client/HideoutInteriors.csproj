@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -8,7 +8,7 @@
     <Copyright>Copyright © 2026 JRS</Copyright>
     <RootNamespace>HideoutInteriors</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>0.2.0</Version>
+    <Version>1.0.0</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
@@ -16,6 +16,13 @@
     <SPTPath Condition="'$(SPTPath)' == ''">F:\SPT</SPTPath>
     <Managed>$(SPTPath)\EscapeFromTarkov_Data\Managed</Managed>
     <BepInExCore>$(SPTPath)\BepInEx\core</BepInExCore>
+  </PropertyGroup>
+
+  <!-- The mod trying itself in the game (Interiors.SelfTest.cs): only with -p:SelfTest=true, never in a release. -->
+  <PropertyGroup Condition="'$(SelfTest)' == 'true'">
+    <DefineConstants>$(DefineConstants);SELFTEST</DefineConstants>
+    <OutputPath>bin\SelfTest\</OutputPath>
+    <IntermediateOutputPath>obj\SelfTest\</IntermediateOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -41,6 +48,17 @@
     <Reference Include="UnityEngine.UIModule" HintPath="$(Managed)\UnityEngine.UIModule.dll" Private="false" />
     <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(Managed)\UnityEngine.TextRenderingModule.dll" Private="false" />
     <Reference Include="Unity.TextMeshPro" HintPath="$(Managed)\Unity.TextMeshPro.dll" Private="false" />
+    <Reference Include="UnityEngine.VideoModule" HintPath="$(Managed)\UnityEngine.VideoModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UnityWebRequestModule" HintPath="$(Managed)\UnityEngine.UnityWebRequestModule.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="$(Managed)\UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="Cinemachine" HintPath="$(Managed)\Cinemachine.dll" Private="false" />
+    <Reference Include="UnityEngine.ScreenCaptureModule" HintPath="$(Managed)\UnityEngine.ScreenCaptureModule.dll" Private="false" />
+    <Reference Include="UnityEngine.ParticleSystemModule" HintPath="$(Managed)\UnityEngine.ParticleSystemModule.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The co-op link: built against Fika, loaded only where Fika is installed. -->
+    <InternalsVisibleTo Include="HideoutInteriors.Fika" />
   </ItemGroup>
 
 </Project>
